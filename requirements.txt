@@ -1,0 +1,18 @@
+# Core Deep Learning Framework
+torch>=2.0.0
+
+# Reinforcement Learning Environments
+gymnasium
+gym-minigrid
+
+# Scientific Computing
+numpy
+pandas
+scipy>=1.10.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Utilities
+tqdm
+

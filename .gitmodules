@@ -1,0 +1,6 @@
+[submodule "convex-init"]
+	path = convex-init
+	url = https://github.com/ml-jku/convex-init.git
+[submodule "Minigrid"]
+	path = Minigrid
+	url = https://github.com/Farama-Foundation/Minigrid.git

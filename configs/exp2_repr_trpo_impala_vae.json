@@ -1,0 +1,66 @@
+{
+  "experiment": {
+    "name": "repr_trpo_impala_vae",
+    "seed": 42,
+    "device": "cuda"
+  },
+  "environment": {
+    "name": "minigrid",
+    "task": "MiniGrid-Unlock-v0"
+  },
+  "architecture": {
+    "critic": {
+      "type": "vae",
+      "latent_dim": 32,
+      "encoder_hidden": [256, 256],
+      "decoder_hidden": [256, 256],
+      "value_hidden": [128, 128],
+      "activation": "relu",
+      "beta": 1.0
+    },
+    "policy": {
+      "type": "impala",
+      "hidden_sizes": [256, 256],
+      "activation": "relu",
+      "num_residual_blocks": 2
+    }
+  },
+  "algorithm": {
+    "type": "trpo",
+    "learning_rate": 3e-4,
+    "value_coef": 0.5,
+    "entropy_coef": 0.01,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "max_kl": 0.01,
+    "damping": 0.1,
+    "cg_iters": 10,
+    "max_grad_norm": 0.5,
+    "batch_size": 64,
+    "num_epochs": 4
+  },
+  "training": {
+    "buffer_size": 2048,
+    "total_epochs": 3000,
+    "total_steps": null,
+    "checkpoint_frequency": 300,
+    "eval_frequency": 300,
+    "metric_evaluation_frequency": 300,
+    "eval_episodes": 10,
+    "eval_deterministic": false
+  },
+  "metrics": {
+    "collect_kl": true,
+    "collect_gradients": true,
+    "collect_hessian": false,
+    "collect_fisher": false,
+    "collect_causal_error": true,
+    "collect_regret": false,
+    "collect_occupancy": false
+  },
+  "logging": {
+    "log_dir": "./logs",
+    "save_weights": true
+  }
+}
+

@@ -1,0 +1,85 @@
+{
+  "experiment": {
+    "name": "rstr_impala_icnn_ablation_no_mu",
+    "seed": 42,
+    "device": "cuda"
+  },
+  "environment": {
+    "name": "minigrid",
+    "task": "MiniGrid-Unlock-v0"
+  },
+  "architecture": {
+    "representation": {
+      "repr_dim": 512,
+      "hidden_sizes": [512, 512],
+      "activation": "relu",
+      "use_cnn": true
+    },
+    "critic": {
+      "type": "icnn",
+      "hidden_sizes": [512, 512],
+      "activation": "relu",
+      "positivity": "exp",
+      "mu": 0.0,
+      "use_convex_init": true
+    },
+    "policy": {
+      "type": "impala",
+      "hidden_sizes": [256, 256],
+      "activation": "relu",
+      "num_residual_blocks": 2
+    }
+  },
+  "algorithm": {
+    "type": "rstr",
+    "learning_rate": 1e-4,
+    "critic_lr": 3e-4,
+    "value_coef": 1.0,
+    "huber_delta": 1.0,
+    "entropy_coef": 0.01,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "delta_z": 5.0,
+    "damping": 0.1,
+    "cg_iters": 10,
+    "max_grad_norm": 1.0,
+    "grad_clip": 10.0,
+    "hessian_clip": 100.0,
+    "use_second_order": false,
+    "batch_size": 256,
+    "num_epochs": 3,
+    "use_contrastive_loss": true,
+    "contrastive_coef": 0.1,
+    "contrastive_ema_alpha": 0.99,
+    "use_target_network": true,
+    "target_update_tau": 0.01,
+    "forward_model_hidden": [256, 256],
+    "forward_model_activation": "relu",
+    "normalize_returns": true
+  },
+  "training": {
+    "buffer_size": 4096,
+    "total_epochs": 1500,
+    "total_steps": null,
+    "checkpoint_frequency": 250,
+    "eval_frequency": 100,
+    "metric_evaluation_frequency": 250,
+    "eval_episodes": 100,
+    "phase_size": 5,
+    "eval_deterministic": false
+  },
+  "metrics": {
+    "collect_kl": true,
+    "collect_gradients": true,
+    "collect_hessian": true,
+    "collect_fisher": false,
+    "collect_causal_error": true,
+    "collect_regret": false,
+    "collect_occupancy": false
+  },
+  "logging": {
+    "log_dir": "./logs",
+    "save_weights": true
+  }
+}
+

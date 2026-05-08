@@ -1,0 +1,58 @@
+{
+  "experiment": {
+    "name": "bounding_chain_experiment",
+    "seed": 42,
+    "device": "cuda"
+  },
+  "environment": {
+    "name": "minigrid",
+    "task": "MiniGrid-Unlock-v0"
+  },
+  "architecture": {
+    "critic": {
+      "type": "feedforward",
+      "hidden_sizes": [256, 256],
+      "activation": "relu"
+    },
+    "policy": {
+      "type": "mlp",
+      "hidden_sizes": [256, 256],
+      "activation": "relu"
+    }
+  },
+  "algorithm": {
+    "type": "ppo",
+    "learning_rate": 3e-4,
+    "value_coef": 0.5,
+    "entropy_coef": 0.01,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_epsilon": 0.2,
+    "max_grad_norm": 0.5,
+    "batch_size": 64,
+    "num_epochs": 4
+  },
+  "training": {
+    "buffer_size": 2048,
+    "total_epochs": 1000,
+    "total_steps": null,
+    "checkpoint_frequency": 100,
+    "eval_frequency": 10,
+    "metric_evaluation_frequency": 10,
+    "eval_episodes": 10
+  },
+  "metrics": {
+    "collect_kl": true,
+    "collect_gradients": true,
+    "collect_hessian": false,
+    "collect_fisher": false,
+    "collect_causal_error": false,
+    "collect_regret": false,
+    "collect_occupancy": false
+  },
+  "logging": {
+    "log_dir": "./logs",
+    "save_weights": true
+  }
+}
+
