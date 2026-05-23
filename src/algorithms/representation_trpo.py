@@ -12,7 +12,10 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 from src.architectures.forward_model import ForwardModel
-from src.utils.representation_loss import compute_representation_loss_with_convexity
+from src.utils.representation_loss import (
+    compute_representation_loss_with_convexity,
+    effective_representation_loss_coef,
+)
 
 
 class RepresentationTRPO:
@@ -65,6 +68,9 @@ class RepresentationTRPO:
         self.entropy_coef = config.get("entropy_coef", 0.01)
         self.vae_coef = config.get("vae_coef", 0.1)  # VAE loss coefficient (reconstruction + KL)
         self.representation_loss_coef = config.get("representation_loss_coef", 0.0)  # Representation loss coefficient
+        self.representation_loss_coef_warmup_epochs = config.get(
+            "representation_loss_coef_warmup_epochs", 0
+        )
         self.use_convexity_weighting = config.get("use_convexity_weighting", True)  # Weight by 1/μ
         self.hessian_compute_freq = config.get("hessian_compute_freq", 10)  # Compute Hessian every N steps
         self.huber_delta = config.get("huber_delta", 1.0)  # Threshold for Huber loss (switches from quadratic to linear)
@@ -486,6 +492,7 @@ class RepresentationTRPO:
         returns: torch.Tensor,
         phase: str = "all",  # "representation", "critic", "policy", or "all"
         next_obs: torch.Tensor = None,  # Next observations for contrastive loss
+        training_epoch: int | None = None,
     ) -> dict:
         """
         Update policy and critic using Representation-Space Trust Region.
@@ -529,6 +536,12 @@ class RepresentationTRPO:
         self._current_returns_mean = returns_mean
         self._current_returns_std = returns_std
         self._current_returns_variance = returns_variance
+
+        effective_repr_coef = effective_representation_loss_coef(
+            self.representation_loss_coef,
+            self.representation_loss_coef_warmup_epochs,
+            training_epoch,
+        )
         
         # Phasic training: only update specified component
         value_loss = torch.tensor(0.0, device=obs.device)
@@ -1431,7 +1444,7 @@ class RepresentationTRPO:
             # Representation loss: L_rep = α * (1/μ) * ||∇_Z V(Z)||²
             representation_loss = torch.tensor(0.0, device=self.device)
             representation_loss_stats = {}
-            if self.representation_loss_coef > 0:
+            if effective_repr_coef > 0:
                 # Determine encoder: repr_net > VAE encoder
                 encoder = None
                 if self.repr_net is not None:
@@ -1444,7 +1457,7 @@ class RepresentationTRPO:
                         encoder=encoder,
                         critic=self.critic,
                         states=obs_flat,
-                        alpha=self.representation_loss_coef,
+                        alpha=effective_repr_coef,
                         use_convexity_weighting=self.use_convexity_weighting,
                         hessian_compute_freq=self.hessian_compute_freq,
                         step=self._step,
@@ -1571,9 +1584,11 @@ class RepresentationTRPO:
             "phase": phase,
             "contrastive_loss": contrastive_loss_val,
         }
+        if self.representation_loss_coef > 0:
+            stats["representation_loss_coef_effective"] = effective_repr_coef
         
         # Add representation loss stats if available
-        if self.representation_loss_coef > 0 and 'representation_loss_stats' in locals() and representation_loss_stats:
+        if effective_repr_coef > 0 and 'representation_loss_stats' in locals() and representation_loss_stats:
             stats["representation_loss"] = representation_loss_stats.get('representation_loss', 0.0)
             stats["repr_grad_norm"] = representation_loss_stats.get('grad_norm', 0.0)
             stats["repr_mu_estimate"] = representation_loss_stats.get('mu_estimate', 0.0)

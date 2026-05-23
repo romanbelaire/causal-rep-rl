@@ -75,6 +75,29 @@ This document describes the 4 experiment setups and their corresponding configs 
 
 ---
 
+## Experiment 8: VAE strict Minigrid — value head comparison (warmup400)
+
+All runs match [`configs/exp8_rstr_impala_vae_strict_warmup400_minigrid.json`](configs/exp8_rstr_impala_vae_strict_warmup400_minigrid.json) (PPO, `representation_loss_coef_warmup_epochs: 400`, `latent_dim: 8`) except the value head.
+
+| Run | Config | Value head | μ w.r.t. encoder latent Z |
+|-----|--------|------------|---------------------------|
+| Baseline | `exp8_rstr_impala_vae_strict_warmup400_minigrid.json` | affine `V(Z)=wᵀZ+b` | μ ≡ 0 |
+| Quadratic (free A) | `exp8_rstr_impala_vae_strict_warmup400_quadratic_latent_minigrid.json` | `V(Z)=ZᵀAᵀAZ+bᵀZ+c` | `μ_latent_analytic = 2σ_min(A)²` |
+| Quadratic (μ_min floor) | `exp8_rstr_impala_vae_strict_warmup400_quadratic_latent_mumin_minigrid.json` | same + `A ← A_free + √(μ_min/2)·I` | floor ≥ 0.02 at init |
+| Squared norm | `exp8_rstr_impala_vae_strict_warmup400_squared_norm_minigrid.json` | `V(Z)=‖f(Z)‖²` (MLP `f`) | Jacobian proxy + autodiff (logged) |
+
+**μ validation:** For `quadratic_latent*`, training fails at startup if `μ_latent_analytic` ≠ `μ_latent_autodiff` (no nonlinear layer between Z and the quadratic form). Squared norm logs both but does not enforce equality.
+
+**Launch:**
+```bash
+bash scripts/run_exp8_warmup_valueheads_minigrid.sh   # interactive
+sbatch exp8_warmup_valueheads_minigrid.sh              # Slurm (3 jobs sequential)
+```
+
+Legacy `quadratic_bottleneck*` configs are deprecated (μ was w.r.t. an internal bottleneck, not Z).
+
+---
+
 ## Running Experiments
 
 ### Submit all experiments:

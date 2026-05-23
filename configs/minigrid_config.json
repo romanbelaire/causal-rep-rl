@@ -5,8 +5,9 @@
     "device": "cuda"
   },
   "environment": {
-    "name": "minigrid",
-    "task": "MiniGrid-Unlock-v0"
+    "name": "frozenlake",
+    "task": "8x8",
+    "is_slippery": false
   },
   "architecture": {
     "critic": {

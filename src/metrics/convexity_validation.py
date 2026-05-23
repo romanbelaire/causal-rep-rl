@@ -18,12 +18,16 @@ import torch.nn as nn
 import numpy as np
 from typing import Dict, Any, Optional
 
+from src.metrics.value_head_types import is_affine_vae_value_head, is_quadratic_latent_value_head
+from src.metrics.value_head_mu import get_analytic_mu_latent
+
 
 def estimate_local_convexity(
     critic: nn.Module,
     z: torch.Tensor,
     mu_min: float = 1e-6,
     sample_size: int = 16,
+    concavity_epsilon: float = 1e-3,
 ) -> Dict[str, Any]:
     """
     Estimate local convexity parameter μ (smallest eigenvalue) of Hessian at sampled representations.
@@ -46,6 +50,34 @@ def estimate_local_convexity(
             - is_convex: Whether μ > mu_min (local convexity holds)
             - pct_convex: Percentage of samples with μ > mu_min (for batched computation)
     """
+    if is_affine_vae_value_head(critic):
+        if z.dim() == 1:
+            z = z.unsqueeze(0)
+        batch_size, repr_dim = z.shape
+        eigenvalues = torch.zeros(batch_size, repr_dim, device=z.device, dtype=z.dtype)
+        print(
+            "Convexity validation: affine value head V(z)=wᵀz+b → μ=0, ∇²_z V ≡ 0 (convex by construction, not μ-strongly convex)"
+        )
+        return {
+            "mu": 0.0,
+            "eigenvalues": eigenvalues,
+            "max_eigenvalue": 0.0,
+            "mean_eigenvalue": 0.0,
+            "is_convex": True,
+            "pct_convex": 1.0,
+            "mu_concave": 0.0,
+            "mu_concave_mean": 0.0,
+            "pct_concave": 0.0,
+            "affine_by_construction": True,
+        }
+
+    if is_quadratic_latent_value_head(critic):
+        mu_z = get_analytic_mu_latent(critic).item()
+        print(
+            "Convexity validation: quadratic PSD on Z → "
+            f"μ_latent_analytic={mu_z:.6f} (2σ_min(A)², constant ∇²_Z V)"
+        )
+
     # Handle single sample case
     if z.dim() == 1:
         z = z.unsqueeze(0)
@@ -150,6 +182,11 @@ def estimate_local_convexity(
     # Percentage of samples with μ > mu_min
     min_eigenvals_per_sample = eigenvalues.min(dim=1)[0]  # [batch_size]
     pct_convex = (min_eigenvals_per_sample > mu_min).float().mean().item()
+
+    mu_concave_batch = (-min_eigenvals_per_sample).clamp(min=0.0)
+    mu_concave = mu_concave_batch.max().item()
+    mu_concave_mean = mu_concave_batch.mean().item()
+    pct_concave = (min_eigenvals_per_sample < -concavity_epsilon).float().mean().item()
     
     return {
         "mu": mu,
@@ -158,6 +195,9 @@ def estimate_local_convexity(
         "mean_eigenvalue": mean_eigenvalue,
         "is_convex": mu > mu_min,
         "pct_convex": pct_convex,
+        "mu_concave": mu_concave,
+        "mu_concave_mean": mu_concave_mean,
+        "pct_concave": pct_concave,
     }
 
 
@@ -327,6 +367,7 @@ def diagnostic_step(
     z_old: Optional[torch.Tensor] = None,
     mu_min: float = 0.05,
     neighborhood_radius: float = 0.1,
+    concavity_epsilon: float = 1e-3,
     step: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -353,13 +394,18 @@ def diagnostic_step(
     }
     
     # 1. Estimate local convexity
-    convexity_results = estimate_local_convexity(critic, z, mu_min=mu_min)
+    convexity_results = estimate_local_convexity(
+        critic, z, mu_min=mu_min, concavity_epsilon=concavity_epsilon
+    )
     results.update({
         "convexity_mu": convexity_results["mu"],
         "convexity_max_eigenvalue": convexity_results["max_eigenvalue"],
         "convexity_mean_eigenvalue": convexity_results["mean_eigenvalue"],
         "convexity_is_convex": convexity_results["is_convex"],
         "convexity_pct_convex": convexity_results["pct_convex"],
+        "convexity_mu_concave": convexity_results["mu_concave"],
+        "convexity_mu_concave_mean": convexity_results["mu_concave_mean"],
+        "convexity_pct_concave": convexity_results["pct_concave"],
     })
     
     # 2. Verify representation bound (if z_old provided)
@@ -400,9 +446,14 @@ def diagnostic_step(
     pct_in_neighborhood = neighborhood_results["pct_in_neighborhood"]
     
     warnings = []
-    
-    if mu < mu_min:
+    affine_head = convexity_results.get("affine_by_construction", False)
+
+    if mu < mu_min and not affine_head:
         warnings.append(f"⚠️  WARNING: μ too small ({mu:.4f} < {mu_min}), convexity assumption violated")
+    elif affine_head:
+        warnings.append(
+            "Affine value head: ∇²_z V ≡ 0 (weakly convex in z; representation bound uses μ_min floor)"
+        )
     
     if correlation is not None and correlation < 0.5:
         warnings.append(f"⚠️  WARNING: bound is loose (correlation={correlation:.3f} < 0.5), may need stronger assumptions")
@@ -423,6 +474,8 @@ def diagnostic_step(
         validation_status = "✓ ICNN validates theory precisely"
     elif mu > 0.05 and (correlation is None or correlation > 0.6) and pct_in_neighborhood > 0.75:
         validation_status = "✓ MLP exhibits local convexity → PPO implicitly does this"
+    elif affine_head:
+        validation_status = "✓ Affine V(z) in z: convex by construction (∇²_z V = 0)"
     elif mu > 0.02 and (correlation is None or correlation > 0.5) and pct_in_neighborhood > 0.6:
         validation_status = "✓ VAE trades theoretical tightness for causal structure"
     else:

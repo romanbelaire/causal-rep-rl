@@ -131,3 +131,22 @@ def compute_value_gradient_difference(
     diff_norm = diff_norm ** (1.0 / 2)
     return diff_norm
 
+
+def _critic_value_on_z(critic: nn.Module, z: torch.Tensor) -> torch.Tensor:
+    """Scalar sum of V(z) for autograd through z."""
+    if hasattr(critic, "value_head"):
+        return critic.value_head(z).sum()
+    return critic(z).sum()
+
+
+def compute_value_gradient_z_magnitude(critic: nn.Module, z: torch.Tensor) -> float:
+    """
+    Compute mean ||∇_Z V(Z)|| over a batch of latent representations.
+
+    This is the quantity in Theorem reprbound and the bounding chain (Theorem 4).
+    """
+    z_grad = z.clone().detach().requires_grad_(True)
+    values = _critic_value_on_z(critic, z_grad)
+    grad_v = torch.autograd.grad(values, z_grad, create_graph=False)[0]
+    return torch.norm(grad_v, dim=1).mean().item()
+

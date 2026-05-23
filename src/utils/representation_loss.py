@@ -14,6 +14,27 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.metrics.value_head_mu import get_mu_for_repr_loss, value_head_mu_stats
+
+
+def effective_representation_loss_coef(
+    base_coef: float,
+    warmup_epochs: int,
+    training_epoch: int | None,
+) -> float:
+    """
+    Linear warmup of representation loss coefficient over training epochs.
+
+    When warmup_epochs <= 0 or training_epoch is None, returns base_coef unchanged.
+    Otherwise scales base_coef by min(1, training_epoch / warmup_epochs).
+    """
+    if base_coef <= 0.0:
+        return 0.0
+    if warmup_epochs <= 0 or training_epoch is None:
+        return base_coef
+    scale = min(1.0, float(training_epoch) / float(warmup_epochs))
+    return base_coef * scale
+
 
 def compute_representation_loss_with_convexity(
     encoder: nn.Module,
@@ -46,7 +67,9 @@ def compute_representation_loss_with_convexity(
         convexity_coef: Coefficient to weight the μ term (default 1.0)
         grad_norm_power: Power to raise gradient norm to (default 1.0 = L2 norm, 2.0 = squared)
                          The theoretical bound uses ||∇_Z V|| (power=1.0), but squared (power=2.0) is smoother
-        hessian_compute_freq: Compute Hessian every N batch updates (1 = every batch update)
+        hessian_compute_freq: Compute Hessian every N batch updates (1 = every batch update).
+            When use_convexity_weighting is True and N > 1, steps where the Hessian is skipped
+            use the unweighted gradient-norm loss (same as mu omitted).
         step: Current batch update number (for frequency control)
         
     Returns:
@@ -82,12 +105,14 @@ def compute_representation_loss_with_convexity(
     # MUST compute Hessian BEFORE computing first gradient to avoid graph reuse issues
     mu_estimate = None
     if use_convexity_weighting:
+        if hessian_compute_freq < 1:
+            raise ValueError(f"hessian_compute_freq must be >= 1, got {hessian_compute_freq}")
         if step % hessian_compute_freq == 0:
-            mu_estimate = compute_smallest_eigenvalue_hessian_z(V, Z, critic)
+            mu_estimate = get_mu_for_repr_loss(critic, Z)
+            if mu_estimate is None:
+                mu_estimate = compute_smallest_eigenvalue_hessian_z(V, Z, critic)
             if torch.isnan(mu_estimate) or torch.isinf(mu_estimate):
                 raise ValueError(f"Hessian computation returned invalid μ: {mu_estimate}")
-        else:
-            raise ValueError(f"use_convexity_weighting=True requires hessian_compute_freq=1 (compute every batch update), got {hessian_compute_freq}")
     
     # Compute gradient ∇_Z V
     # V is [batch_size, 1], so we sum over batch to get scalar for gradient
@@ -126,9 +151,10 @@ def compute_representation_loss_with_convexity(
         "grad_norm": grad_norm.mean().item(),
         "mu_estimate": mu_estimate.item() if isinstance(mu_estimate, torch.Tensor) else mu_estimate,
         "grad_norm_powered": grad_norm_powered.mean().item(),
-        "grad_norm_sq_mean": (grad_norm ** 2).mean().item(),  # Keep for backward compatibility
+        "grad_norm_sq_mean": (grad_norm ** 2).mean().item(),
     }
-    
+    stats.update(value_head_mu_stats(critic, Z))
+
     return L_rep, stats
 
 

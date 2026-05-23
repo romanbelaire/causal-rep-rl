@@ -12,7 +12,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=200gb
 #SBATCH --time=02-0:00:0
-#SBATCH --constraint=h100nvl|h200|h100|l40|l40s|a100|a40
+##SBATCH --constraint=h100nvl|h200|h100|l40|l40s|a100|a40
+#SBATCH --constraint=nopreempt
 #SBATCH --mail-type=END
 #SBATCH --output=%u.plots.%j.out
 #SBATCH --requeue

@@ -37,6 +37,100 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+from src.metrics.value_head_types import is_affine_vae_value_head, is_quadratic_psd_value_head
+
+
+def compute_hessian_spectrum_affine_latent(
+    critic: nn.Module,
+    obs_raw: torch.Tensor,
+    top_k: int = 10,
+) -> dict:
+    """
+    Hessian spectrum of V w.r.t. latent z for an affine value head (∇²_z V = 0).
+    """
+    with torch.no_grad():
+        mu, _ = critic.encode(obs_raw)
+    z0 = mu[0].clone().detach().requires_grad_(True)
+
+    def value_fn(z_single: torch.Tensor) -> torch.Tensor:
+        return critic.value_head(z_single.unsqueeze(0))[0, 0]
+
+    H = torch.autograd.functional.hessian(value_fn, z0, create_graph=False)
+    max_abs = H.abs().max().item()
+    if max_abs > 1e-5:
+        raise RuntimeError(
+            f"Affine VAE value head expected ∇²_z V ≡ 0, but max |H| = {max_abs:.6e}"
+        )
+
+    print(
+        "Hessian (∇²_z V): affine value head V(z)=wᵀz+b → identically zero by construction "
+        f"(verified max |H| = {max_abs:.2e} on latent sample)"
+    )
+
+    latent_dim = critic.latent_dim
+    eigenvalues = np.zeros(min(top_k, latent_dim), dtype=np.float64)
+    if len(eigenvalues) < top_k:
+        eigenvalues = np.pad(eigenvalues, (0, top_k - len(eigenvalues)))
+
+    return {
+        "eigenvalues": eigenvalues,
+        "eigenvectors": torch.zeros(top_k, latent_dim),
+        "min_eigenvalue": 0.0,
+        "max_eigenvalue": 0.0,
+        "mean_eigenvalue": 0.0,
+        "hessian_space": "latent_z",
+        "affine_value_head": True,
+    }
+
+
+def compute_hessian_spectrum_quadratic_psd_latent(
+    critic: nn.Module,
+    obs_raw: torch.Tensor,
+    top_k: int = 10,
+) -> dict:
+    """
+    Hessian spectrum of V w.r.t. VAE latent Z for quadratic PSD-on-Z head.
+
+    Logs μ_latent_analytic = 2 σ_min(A)² and verifies agreement with autodiff.
+    """
+    from src.metrics.value_head_mu import get_analytic_mu_latent
+
+    with torch.no_grad():
+        mu_enc, _ = critic.encode(obs_raw)
+    z0 = mu_enc[0].clone().detach().requires_grad_(True)
+
+    def value_fn(z_single: torch.Tensor) -> torch.Tensor:
+        return critic.value_head(z_single.unsqueeze(0))[0, 0]
+
+    H = torch.autograd.functional.hessian(value_fn, z0, create_graph=False)
+    H_sym = (H + H.T) * 0.5
+    eigenvals = torch.linalg.eigvalsh(H_sym)
+    mu_latent_autodiff = eigenvals[0].item()
+    mu_latent_analytic = get_analytic_mu_latent(critic).item()
+
+    print(
+        "Hessian (∇²_Z V): quadratic PSD on latent Z → "
+        f"μ_latent_analytic={mu_latent_analytic:.6f} (2σ_min(A)²), "
+        f"μ_latent_autodiff={mu_latent_autodiff:.6f}"
+    )
+
+    latent_dim = critic.latent_dim
+    k = min(top_k, latent_dim)
+    ev = eigenvals[:k].detach().cpu().numpy()
+    if len(ev) < top_k:
+        ev = np.pad(ev, (0, top_k - len(ev)))
+
+    return {
+        "eigenvalues": ev,
+        "eigenvectors": torch.zeros(top_k, latent_dim),
+        "min_eigenvalue": mu_latent_autodiff,
+        "max_eigenvalue": eigenvals[-1].item(),
+        "mean_eigenvalue": eigenvals.mean().item(),
+        "hessian_space": "latent_z",
+        "quadratic_psd_value_head": True,
+        "mu_latent_analytic": mu_latent_analytic,
+    }
+
 
 def compute_hessian_spectrum(
     critic: nn.Module,
@@ -61,6 +155,22 @@ def compute_hessian_spectrum(
             - max_eigenvalue: Maximum eigenvalue
             - mean_eigenvalue: Mean eigenvalue
     """
+    if is_affine_vae_value_head(critic):
+        if obs.shape[-1] == critic.latent_dim:
+            raise ValueError(
+                "Affine VAE Hessian requires raw observations [N, obs_dim], not latent z. "
+                "Pass obs_sample_raw from metric evaluation."
+            )
+        return compute_hessian_spectrum_affine_latent(critic, obs, top_k=top_k)
+
+    if is_quadratic_psd_value_head(critic):
+        if obs.shape[-1] == critic.latent_dim:
+            raise ValueError(
+                "Quadratic PSD VAE Hessian requires raw observations [N, obs_dim], not latent z. "
+                "Pass obs_sample_raw from metric evaluation."
+            )
+        return compute_hessian_spectrum_quadratic_psd_latent(critic, obs, top_k=top_k)
+
     obs.requires_grad_(True)
     
     # Compute value sum (scalar)
@@ -419,6 +529,16 @@ def compute_hessian_trace(
     Returns:
         Estimated trace
     """
+    if is_affine_vae_value_head(critic):
+        if obs.shape[-1] == critic.latent_dim:
+            raise ValueError(
+                "Affine VAE Hessian trace requires raw observations, not latent z."
+            )
+        print(
+            "Hessian trace Tr(∇²_z V): affine value head → 0 by construction (skipping parameter-space estimate)"
+        )
+        return 0.0
+
     # Determine used parameters once (consistent with compute_hessian_spectrum)
     obs_test = obs.clone().detach().requires_grad_(True)
     # For VAE critics, if obs is already encoded (latent z), use value_head directly

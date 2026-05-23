@@ -1,0 +1,75 @@
+{
+  "experiment": {
+    "name": "rstr_impala_vae_strict_warmup400_squared_norm_minigrid",
+    "seed": 42,
+    "device": "cuda"
+  },
+  "environment": {
+    "name": "minigrid",
+    "task": "MiniGrid-Unlock-v0"
+  },
+  "architecture": {
+    "critic": {
+      "type": "vae",
+      "latent_dim": 8,
+      "encoder_hidden": [64, 64],
+      "decoder_hidden": [64, 64],
+      "value_hidden": [],
+      "value_head_type": "squared_norm",
+      "value_mlp_hidden": 64,
+      "value_feature_dim": 8,
+      "activation": "relu",
+      "beta": 1.0
+    },
+    "policy": {
+      "type": "impala",
+      "hidden_sizes": [64, 64],
+      "activation": "relu",
+      "num_residual_blocks": 2
+    }
+  },
+  "algorithm": {
+    "type": "ppo",
+    "learning_rate": 1e-4,
+    "value_coef": 0.5,
+    "entropy_coef": 0.01,
+    "vae_coef": 0.1,
+    "representation_loss_coef": 0.1,
+    "representation_loss_coef_warmup_epochs": 400,
+    "use_convexity_weighting": true,
+    "convexity_coef": 5.0,
+    "hessian_compute_freq": 2,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_epsilon": 0.2,
+    "max_grad_norm": 0.2,
+    "batch_size": 256,
+    "num_epochs": 3
+  },
+  "training": {
+    "buffer_size": 4096,
+    "total_epochs": 1500,
+    "total_steps": null,
+    "checkpoint_frequency": 250,
+    "eval_frequency": 100,
+    "metric_evaluation_frequency": 100,
+    "eval_episodes": 100,
+    "eval_deterministic": false
+  },
+  "metrics": {
+    "collect_kl": true,
+    "collect_gradients": true,
+    "collect_hessian": true,
+    "collect_fisher": false,
+    "collect_causal_error": true,
+    "collect_regret": false,
+    "collect_occupancy": false,
+    "collect_convexity_validation": true,
+    "convexity_mu_min": 0.02,
+    "convexity_neighborhood_radius": 0.1
+  },
+  "logging": {
+    "log_dir": "./outputs/exp8",
+    "save_weights": true
+  }
+}

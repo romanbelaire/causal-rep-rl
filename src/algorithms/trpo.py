@@ -8,7 +8,10 @@ import torch.optim as optim
 import numpy as np
 from scipy.optimize import minimize
 
-from src.utils.representation_loss import compute_representation_loss_with_convexity
+from src.utils.representation_loss import (
+    compute_representation_loss_with_convexity,
+    effective_representation_loss_coef,
+)
 
 
 class TRPO:
@@ -51,6 +54,9 @@ class TRPO:
         self.entropy_coef = config.get("entropy_coef", 0.01)
         self.vae_coef = config.get("vae_coef", 0.1)  # VAE loss coefficient (reconstruction + KL)
         self.representation_loss_coef = config.get("representation_loss_coef", 0.0)  # Representation loss coefficient
+        self.representation_loss_coef_warmup_epochs = config.get(
+            "representation_loss_coef_warmup_epochs", 0
+        )
         self.use_convexity_weighting = config.get("use_convexity_weighting", True)  # Weight by 1/μ
         self.hessian_compute_freq = config.get("hessian_compute_freq", 10)  # Compute Hessian every N steps
         self.batch_size = config.get("batch_size", 64)
@@ -136,6 +142,7 @@ class TRPO:
         old_log_probs: torch.Tensor,
         advantages: torch.Tensor,
         returns: torch.Tensor,
+        training_epoch: int | None = None,
     ) -> dict:
         """
         Update policy and critic using TRPO.
@@ -152,6 +159,12 @@ class TRPO:
         """
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        effective_repr_coef = effective_representation_loss_coef(
+            self.representation_loss_coef,
+            self.representation_loss_coef_warmup_epochs,
+            training_epoch,
+        )
         
         # Get representation z for policy
         # Priority: repr_net > VAE encoder > raw observations
@@ -192,7 +205,7 @@ class TRPO:
         # Representation loss: L_rep = α * (1/μ) * ||∇_Z V(Z)||²
         representation_loss = torch.tensor(0.0, device=self.device)
         representation_loss_stats = {}
-        if self.representation_loss_coef > 0:
+        if effective_repr_coef > 0:
             # Determine encoder: repr_net > VAE encoder
             encoder = None
             if self.repr_net is not None:
@@ -205,7 +218,7 @@ class TRPO:
                     encoder=encoder,
                     critic=self.critic,
                     states=obs,
-                    alpha=self.representation_loss_coef,
+                    alpha=effective_repr_coef,
                     use_convexity_weighting=self.use_convexity_weighting,
                     hessian_compute_freq=self.hessian_compute_freq,
                     step=self._step,
@@ -308,9 +321,11 @@ class TRPO:
             "entropy": entropy.mean().item(),
             "kl": new_kl,
         }
+        if self.representation_loss_coef > 0:
+            stats["representation_loss_coef_effective"] = effective_repr_coef
         
         # Add representation loss stats if available
-        if self.representation_loss_coef > 0 and representation_loss_stats:
+        if effective_repr_coef > 0 and representation_loss_stats:
             stats["representation_loss"] = representation_loss_stats.get('representation_loss', 0.0)
             stats["repr_grad_norm"] = representation_loss_stats.get('grad_norm', 0.0)
             stats["repr_mu_estimate"] = representation_loss_stats.get('mu_estimate', 0.0)

@@ -7,7 +7,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.utils.representation_loss import compute_representation_loss_with_convexity
+from src.utils.representation_loss import (
+    compute_representation_loss_with_convexity,
+    effective_representation_loss_coef,
+)
 
 
 class PPO:
@@ -47,6 +50,9 @@ class PPO:
         self.entropy_coef = config.get("entropy_coef", 0.01)
         self.vae_coef = config.get("vae_coef", 0.1)  # VAE loss coefficient (reconstruction + KL)
         self.representation_loss_coef = config.get("representation_loss_coef", 0.0)  # Representation loss coefficient
+        self.representation_loss_coef_warmup_epochs = config.get(
+            "representation_loss_coef_warmup_epochs", 0
+        )  # 0 = no warmup
         self.use_convexity_weighting = config.get("use_convexity_weighting", True)  # Weight by -μ
         self.convexity_coef = config.get("convexity_coef", 1.0)  # Coefficient for μ term in loss
         self.grad_norm_power = config.get("grad_norm_power", 1.0)  # Power for gradient norm (1.0 = L2 norm, 2.0 = squared)
@@ -115,6 +121,7 @@ class PPO:
         old_log_probs: torch.Tensor,
         advantages: torch.Tensor,
         returns: torch.Tensor,
+        training_epoch: int | None = None,
     ) -> dict:
         """
         Update policy and critic networks.
@@ -131,7 +138,13 @@ class PPO:
         """
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
+
+        effective_repr_coef = effective_representation_loss_coef(
+            self.representation_loss_coef,
+            self.representation_loss_coef_warmup_epochs,
+            training_epoch,
+        )
+
         # Create dataset
         dataset = TensorDataset(obs, actions, old_log_probs, advantages, returns)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
@@ -242,7 +255,7 @@ class PPO:
                 # Representation loss: L_rep = α * (-convexity_coef * μ) * ||∇_Z V(Z)||²
                 representation_loss = torch.tensor(0.0, device=self.device)
                 representation_loss_stats = {}
-                if self.representation_loss_coef > 0:
+                if effective_repr_coef > 0:
                     # Determine encoder: repr_net > VAE encoder
                     encoder = None
                     if self.repr_net is not None:
@@ -255,7 +268,7 @@ class PPO:
                             encoder=encoder,
                             critic=self.critic,
                             states=batch_obs,
-                            alpha=self.representation_loss_coef,
+                            alpha=effective_repr_coef,
                             use_convexity_weighting=self.use_convexity_weighting,
                             convexity_coef=self.convexity_coef,
                             grad_norm_power=self.grad_norm_power,
@@ -315,7 +328,7 @@ class PPO:
                 total_entropy += entropy.mean().item()
                 
                 # Track representation loss stats
-                if self.representation_loss_coef > 0 and representation_loss_stats:
+                if effective_repr_coef > 0 and representation_loss_stats:
                     if not hasattr(self, '_repr_loss_stats'):
                         self._repr_loss_stats = {
                             'representation_loss': [],
@@ -356,6 +369,8 @@ class PPO:
             "entropy": total_entropy / num_updates,
             "kl": total_kl / num_updates,
         }
+        if self.representation_loss_coef > 0:
+            stats["representation_loss_coef_effective"] = effective_repr_coef
         
         # Add representation loss stats if available
         if hasattr(self, '_repr_loss_stats') and len(self._repr_loss_stats['representation_loss']) > 0:

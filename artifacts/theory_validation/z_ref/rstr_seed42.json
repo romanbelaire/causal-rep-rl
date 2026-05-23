@@ -1,0 +1,7 @@
+{
+  "config": "configs/theory_validation/expert_rstr_minigrid.json",
+  "weights": "outputs/theory_validation_v2/expert_rstr_minigrid_seed42/weights_final.pt",
+  "n_episodes": 500,
+  "n_states": 494,
+  "seed": 42
+}

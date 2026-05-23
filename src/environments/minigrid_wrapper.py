@@ -228,3 +228,45 @@ class MinigridWrapper:
         """Render environment."""
         return self.env.render(mode=mode)
 
+
+class MinigridColorAugWrapper:
+    """
+    Non-causal observation change: permute RGB channels in the image observation.
+
+    Grid topology and get_ground_truth_representation are unchanged (Exp 5 transfer).
+    """
+
+    def __init__(self, base: MinigridWrapper, color_perm_seed: int = 0):
+        self.base = base
+        self.env_name = base.env_name
+        self.obs_shape = base.obs_shape
+        self.obs_dim = base.obs_dim
+        self.action_dim = base.action_dim
+        self.keep_image_format = base.keep_image_format
+        rng = np.random.default_rng(color_perm_seed)
+        self.color_perm = rng.permutation(3)
+
+    def _permute_colors(self, obs: torch.Tensor) -> torch.Tensor:
+        H, W, C = self.obs_shape
+        if self.keep_image_format:
+            return obs[..., self.color_perm]
+        img = obs.view(H, W, C)
+        return img[..., self.color_perm].reshape(-1)
+
+    def reset(self, seed: int | None = None) -> tuple[torch.Tensor, dict]:
+        obs, info = self.base.reset(seed=seed)
+        return self._permute_colors(obs), info
+
+    def step(self, action: int | torch.Tensor) -> tuple[torch.Tensor, float, bool, bool, dict]:
+        obs, reward, terminated, truncated, info = self.base.step(action)
+        return self._permute_colors(obs), reward, terminated, truncated, info
+
+    def get_ground_truth_representation(self, obs: np.ndarray | torch.Tensor = None) -> torch.Tensor:
+        return self.base.get_ground_truth_representation(obs)
+
+    def close(self):
+        self.base.close()
+
+    def render(self, mode: str = "human"):
+        return self.base.render(mode=mode)
+

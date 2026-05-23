@@ -22,9 +22,12 @@ from src.architectures.policies.impala import IMPALAPolicy
 from src.architectures.policies.cnn_impala import CNNIMPALAPolicy
 from src.architectures.representation import RepresentationNetwork
 from src.environments.minigrid_wrapper import MinigridWrapper
+from src.environments.frozenlake_wrapper import FrozenLakeWrapper
 from src.utils.config import Config
 from src.utils.logging import CSVLogger
 from src.utils.metric_evaluator import MetricEvaluator
+from src.metrics.mu_latent_validation import verify_mu_latent_agreement
+from src.metrics.value_head_types import is_quadratic_latent_value_head, is_squared_norm_value_head
 
 
 def set_seed(seed: int):
@@ -96,7 +99,25 @@ def create_critic(obs_dim: int, config: dict, device: str = "cuda", repr_net: Re
         decoder_hidden = config["architecture"]["critic"].get("decoder_hidden", [256, 256])
         value_hidden = config["architecture"]["critic"].get("value_hidden", [128, 128])
         beta = config["architecture"]["critic"].get("beta", 1.0)
-        critic = VAECritic(obs_dim, latent_dim, encoder_hidden, decoder_hidden, value_hidden, activation, beta)
+        value_head_type = config["architecture"]["critic"].get("value_head_type")
+        value_mlp_hidden = config["architecture"]["critic"].get("value_mlp_hidden", 64)
+        value_bottleneck_dim = config["architecture"]["critic"].get("value_bottleneck_dim", 8)
+        value_mu_min_floor = config["architecture"]["critic"].get("value_mu_min_floor", 0.02)
+        value_feature_dim = config["architecture"]["critic"].get("value_feature_dim", 8)
+        critic = VAECritic(
+            obs_dim,
+            latent_dim,
+            encoder_hidden,
+            decoder_hidden,
+            value_hidden,
+            activation,
+            beta,
+            value_head_type=value_head_type,
+            value_mlp_hidden=value_mlp_hidden,
+            value_bottleneck_dim=value_bottleneck_dim,
+            value_mu_min_floor=value_mu_min_floor,
+            value_feature_dim=value_feature_dim,
+        )
     else:
         raise ValueError(f"Unknown critic type: {critic_type}")
     
@@ -249,6 +270,11 @@ def collect_rollout_buffer(
             done = terminated or truncated
             
             buffer["obs"].append(obs.cpu() if isinstance(obs, torch.Tensor) else obs)
+            if hasattr(env, "get_ground_truth_representation"):
+                gt = env.get_ground_truth_representation(obs)
+                buffer.setdefault("gt_repr", []).append(
+                    gt.cpu() if isinstance(gt, torch.Tensor) else gt
+                )
             buffer["actions"].append(action.cpu())
             buffer["rewards"].append(reward)
             buffer["dones"].append(done)
@@ -293,13 +319,108 @@ def collect_rollout_buffer(
     else:
         buffer["next_obs"] = None
     
+    if "gt_repr" in buffer and len(buffer["gt_repr"]) > 0:
+        buffer["gt_repr"] = torch.stack(buffer["gt_repr"][:actual_size])
+
     buffer["episode_returns"] = episode_returns
     buffer["episode_lengths"] = episode_lengths
     
     return buffer
 
 
-def train(config_path: str):
+def _policy_action_from_obs(
+    obs,
+    policy,
+    critic,
+    repr_net,
+    device: str,
+    deterministic: bool = True,
+):
+    """Shared obs -> action for eval and transfer rollouts."""
+    if not isinstance(obs, torch.Tensor):
+        obs_tensor = obs.unsqueeze(0).to(device)
+    else:
+        obs_tensor = obs.to(device)
+        if obs_tensor.dim() == 1:
+            obs_tensor = obs_tensor.unsqueeze(0)
+
+    with torch.no_grad():
+        if repr_net is not None:
+            if obs_tensor.dim() == 4:
+                N, H, W, C = obs_tensor.shape
+                obs_flat = obs_tensor.view(N, H * W * C)
+            else:
+                obs_flat = obs_tensor
+            z = repr_net(obs_flat)
+        elif hasattr(critic, "get_latent_representation"):
+            if obs_tensor.dim() == 4:
+                N, H, W, C = obs_tensor.shape
+                obs_flat = obs_tensor.view(N, H * W * C)
+            else:
+                obs_flat = obs_tensor
+            z = critic.get_latent_representation(obs_flat)
+        elif hasattr(critic, "encode"):
+            if obs_tensor.dim() == 4:
+                N, H, W, C = obs_tensor.shape
+                obs_flat = obs_tensor.view(N, H * W * C)
+            else:
+                obs_flat = obs_tensor
+            mu, _ = critic.encode(obs_flat)
+            z = mu
+        else:
+            z = obs_tensor
+
+        action, _ = policy.get_action(z, deterministic=deterministic)
+        if isinstance(action, torch.Tensor):
+            action = action.squeeze(0) if action.dim() > 0 and action.shape[0] == 1 else action
+            action_val = action.item() if action.numel() == 1 else int(action)
+        else:
+            action_val = int(action)
+    return action_val
+
+
+def run_eval_rollout(
+    env,
+    policy,
+    critic,
+    repr_net,
+    device: str,
+    n_episodes: int,
+    deterministic: bool = True,
+) -> dict:
+    """Run eval episodes; success = total_reward > 0 (Unlock unlock reward)."""
+    rewards = []
+    lengths = []
+    successes = 0
+    policy.eval()
+    for _ in range(n_episodes):
+        obs, _ = env.reset()
+        total_reward = 0.0
+        done = False
+        steps = 0
+        while not done:
+            action_val = _policy_action_from_obs(
+                obs, policy, critic, repr_net, device, deterministic=deterministic
+            )
+            obs, reward, terminated, truncated, _ = env.step(action_val)
+            total_reward += float(reward)
+            steps += 1
+            done = terminated or truncated
+        rewards.append(total_reward)
+        lengths.append(steps)
+        if total_reward > 0:
+            successes += 1
+    policy.train()
+    return {
+        "reward_mean": float(np.mean(rewards)) if rewards else 0.0,
+        "reward_std": float(np.std(rewards)) if rewards else 0.0,
+        "reward_max": float(np.max(rewards)) if rewards else 0.0,
+        "episode_length": float(np.mean(lengths)) if lengths else 0.0,
+        "success_rate": successes / n_episodes if n_episodes > 0 else 0.0,
+    }
+
+
+def train(config_path: str, seed_override: int | None = None):
     """
     Main training function with buffer-based epochs.
     
@@ -315,7 +436,7 @@ def train(config_path: str):
     config = Config(config_path)
     
     # Set seed
-    seed = config.get("experiment.seed", 42)
+    seed = seed_override if seed_override is not None else config.get("experiment.seed", 42)
     set_seed(seed)
     
     # Device
@@ -331,6 +452,15 @@ def train(config_path: str):
         task = config["environment"]["task"]
         # Always flatten observations - shared encoder will handle encoding
         env = MinigridWrapper(task, seed=seed, keep_image_format=False)
+        transfer_env = None
+        eval_cfg = config.config.get("evaluation", {})
+        if eval_cfg.get("transfer_augmentation") == "color_perm_v1":
+            perm_seed = eval_cfg.get("transfer_color_perm_seed", seed + 1000)
+            from src.environments.minigrid_wrapper import MinigridColorAugWrapper
+            transfer_base = MinigridWrapper(
+                eval_cfg.get("transfer_task", task), seed=seed, keep_image_format=False
+            )
+            transfer_env = MinigridColorAugWrapper(transfer_base, color_perm_seed=perm_seed)
         obs_dim = env.obs_dim
         action_dim = env.action_dim
         ground_truth_repr_fn = env.get_ground_truth_representation
@@ -340,6 +470,16 @@ def train(config_path: str):
         if hasattr(env, 'obs_shape'):
             obs_shape = env.obs_shape  # (H, W, C)
             print(f"Detected image observation shape: {obs_shape}")
+    elif env_name == "frozenlake":
+        task = config["environment"]["task"]  # e.g. "8x8" (map_name)
+        is_slippery = config["environment"].get("is_slippery", False)
+
+        env = FrozenLakeWrapper(task, is_slippery=is_slippery, seed=seed)
+        obs_dim = env.obs_dim
+        action_dim = env.action_dim
+        ground_truth_repr_fn = env.get_ground_truth_representation
+        obs_shape = env.obs_shape
+        transfer_env = None
     else:
         raise ValueError(f"Unknown environment: {env_name}")
     
@@ -355,11 +495,16 @@ def train(config_path: str):
     needs_repr_net = (critic_type == "icnn" or critic_type == "feedforward")
     
     repr_net = None
-    if obs_shape is not None and needs_repr_net:  # Image observations (Minigrid, Procgen) and critic needs repr_net
+    if needs_repr_net:
+        # Vector observations (e.g. FrozenLake) use an MLP representation network.
+        # Image observations (e.g. Minigrid) use the CNN representation network path.
         repr_net = create_representation_network(obs_dim, config.config, device, obs_shape=obs_shape)
         repr_dim = config["architecture"].get("representation", {}).get("repr_dim", 512)
-        print(f"Created shared CNN encoder (representation network): s -> z (dim={repr_dim})")
-    elif obs_shape is not None and critic_type == "vae":
+        if obs_shape is not None:
+            print(f"Created shared CNN encoder (representation network): s -> z (dim={repr_dim})")
+        else:
+            print(f"Created shared MLP encoder (representation network): s -> z (dim={repr_dim})")
+    elif critic_type == "vae":
         # VAE critic has its own encoder, no separate repr_net needed
         # Policy will use VAE encoder's latent representation z
         latent_dim = config["architecture"]["critic"].get("latent_dim", 32)
@@ -380,7 +525,15 @@ def train(config_path: str):
     # - For Feedforward: takes repr_dim if repr_net exists, else obs_dim
     critic_input_dim = obs_dim if critic_type == "vae" else repr_dim
     critic = create_critic(critic_input_dim, config.config, device, repr_net=repr_net)
-    
+
+    if critic_type == "vae" and (
+        is_quadratic_latent_value_head(critic) or is_squared_norm_value_head(critic)
+    ):
+        probe_obs = torch.randn(4, critic_input_dim, device=device)
+        mu_probe, _ = critic.encode(probe_obs)
+        mu_result = verify_mu_latent_agreement(critic, mu_probe)
+        print(f"μ_latent startup check: {mu_result}")
+
     # Create algorithm
     algorithm_type = config["algorithm"]["type"]
     if algorithm_type == "ppo":
@@ -394,12 +547,15 @@ def train(config_path: str):
     
     # Create logger
     experiment_name = config["experiment"]["name"]
+    if seed_override is not None:
+        experiment_name = f"{experiment_name}_seed{seed}"
     log_dir = Path(config["logging"]["log_dir"])
     logger = CSVLogger(log_dir, experiment_name)
     logger.save_config(config.config)
     
-    # Experiment storage structure: environment/network_type/
-    exp_storage_dir = log_dir / env_name / f"{config['architecture']['policy']['type']}_{config['architecture']['critic']['type']}"
+    # Checkpoints/final weights live under experiment_name (avoids collisions when
+    # policy/critic types match across different configs, e.g. RSTR vs VAE PPO experts).
+    exp_storage_dir = log_dir / experiment_name
     exp_storage_dir.mkdir(parents=True, exist_ok=True)
     
     # Training configuration
@@ -456,9 +612,14 @@ def train(config_path: str):
     max_gpu_memory_mb = 0.0
     gpu_memory_log_freq = 100  # Log every 100 epochs
     
+    expert_cfg = config.config.get("expert", {})
+    training_complete = False
+
     # Training loop: epoch-based
     while True:
         # Check stopping condition
+        if training_complete:
+            break
         if total_epochs is not None and epoch >= total_epochs:
             break
         if total_steps is not None and total_steps_collected >= total_steps:
@@ -530,6 +691,7 @@ def train(config_path: str):
                 returns,
                 phase=current_phase,
                 next_obs=buffer.get("next_obs"),  # Pass next_obs for contrastive loss (RSTR only)
+                training_epoch=epoch,
             )
         else:
             # Vanilla PPO/TRPO: no phase or next_obs
@@ -539,6 +701,7 @@ def train(config_path: str):
                 buffer["log_probs"],
                 advantages,
                 returns,
+                training_epoch=epoch,
             )
         
         # Accumulate metrics for phasic training
@@ -685,6 +848,7 @@ def train(config_path: str):
                         old_critic=old_critic,
                         episode_returns=non_phasic_cycle_metrics["episode_returns"],
                         old_occupancy=old_occupancy,
+                        gt_repr_buffer=buffer.get("gt_repr"),
                     )
                     final_metrics.update(metric_results)
                     
@@ -705,14 +869,21 @@ def train(config_path: str):
         if phase_size is not None and current_phase == "policy" and phase_epoch_count == phase_size:
             # End of policy phase = end of cycle, evaluate expensive metrics
             if epoch % metric_eval_freq == 0:
+                obs_buf = cycle_buffer["obs"] if cycle_buffer is not None else buffer["obs"]
+                gt_buf = (
+                    cycle_buffer.get("gt_repr")
+                    if cycle_buffer is not None
+                    else buffer.get("gt_repr")
+                )
                 metric_results = metric_evaluator.evaluate_all(
                     policy=policy,
                     critic=critic,
-                    obs_buffer=cycle_buffer["obs"] if cycle_buffer is not None else buffer["obs"],
+                    obs_buffer=obs_buf,
                     old_policy=old_policy,
                     old_critic=old_critic,
                     episode_returns=cycle_metrics["episode_returns"] if cycle_metrics else buffer["episode_returns"],
                     old_occupancy=old_occupancy,
+                    gt_repr_buffer=gt_buf,
                 )
                 if cycle_metrics is not None:
                     cycle_metrics.update(metric_results)
@@ -982,6 +1153,9 @@ def train(config_path: str):
             std_reward = np.std(eval_rewards)
             avg_length = np.mean(eval_episode_lengths)
             max_reward = np.max(eval_rewards)
+            eval_success_rate = (
+                sum(1 for r in eval_rewards if r > 0) / len(eval_rewards) if eval_rewards else 0.0
+            )
             eval_mode = "deterministic" if eval_deterministic else "stochastic"
             
             # Format action distribution as string for CSV
@@ -1041,7 +1215,7 @@ def train(config_path: str):
                 sample_size = min(256, len(buffer["obs"]))
                 obs_sample = buffer["obs"][:sample_size]
                 
-                # Get representation if using shared encoder
+                # Policy is always fed latent z (same path as rollout). Map buffer obs -> z.
                 if repr_net is not None:
                     # Flatten image observations if needed
                     if obs_sample.dim() == 4:  # [N, H, W, C]
@@ -1050,25 +1224,13 @@ def train(config_path: str):
                     else:
                         obs_flat = obs_sample
                     z_sample = repr_net(obs_flat)
+                elif hasattr(critic, 'get_latent_representation'):
+                    z_sample = critic.get_latent_representation(obs_sample)
+                elif hasattr(critic, 'encode'):
+                    mu, _ = critic.encode(obs_sample)
+                    z_sample = mu
                 else:
                     z_sample = obs_sample
-                
-                # For VAE critics, ensure z_sample is encoded using VAE encoder
-                # (not repr_net, which doesn't exist for VAE)
-                # Check if we need to encode: VAE critics expect raw obs, policy expects encoded z
-                if hasattr(critic, 'get_latent_representation'):
-                    # VAE critic: encode raw observations to get latent z
-                    # Check if z_sample is still raw (large dim like 147) vs encoded (small dim like 32)
-                    # VAE latent dim is typically much smaller than obs dim
-                    if z_sample.shape[-1] > 100:  # Likely raw observation, not encoded
-                        with torch.no_grad():
-                            z_sample = critic.get_latent_representation(z_sample)
-                elif hasattr(critic, 'encode'):
-                    # VAE with encode method
-                    if z_sample.shape[-1] > 100:  # Likely raw observation, not encoded
-                        with torch.no_grad():
-                            mu, _ = critic.encode(z_sample)
-                            z_sample = mu
                 
                 # Compute entropy directly from policy forward pass
                 try:
@@ -1100,6 +1262,7 @@ def train(config_path: str):
             print(f"reward_std:      {std_reward:.4f}")
             print(f"reward_max:      {max_reward:.4f}")
             print(f"episode_length:   {avg_length:.1f}")
+            print(f"success_rate:     {eval_success_rate:.2%}")
             if len(action_counts) > 0:
                 print(f"action_dist:     {action_dist_str}")
             if recent_value_loss is not None:
@@ -1196,14 +1359,45 @@ def train(config_path: str):
                 "eval_reward_std": std_reward,
                 "eval_reward_max": max_reward,
                 "eval_episode_length": avg_length,
+                "eval_success_rate": eval_success_rate,
                 "eval_mode": eval_mode,
             }
             if action_dist_str:
                 eval_metrics["eval_action_distribution"] = action_dist_str
+
+            if transfer_env is not None:
+                transfer_results = run_eval_rollout(
+                    transfer_env,
+                    policy,
+                    critic,
+                    repr_net,
+                    device,
+                    eval_episodes,
+                    deterministic=eval_deterministic,
+                )
+                eval_metrics["eval_transfer_reward_mean"] = transfer_results["reward_mean"]
+                eval_metrics["eval_transfer_success_rate"] = transfer_results["success_rate"]
+                print(
+                    f"transfer success: {transfer_results['success_rate']:.2%}, "
+                    f"transfer reward: {transfer_results['reward_mean']:.4f}"
+                )
             
             # Use total_steps_collected to ensure alignment with training metrics
-            # This ensures the x-axis (step) is consistent across all metric types
             logger.log_metrics(total_steps_collected, eval_metrics)
+
+            min_sr = expert_cfg.get("min_success_rate")
+            if min_sr is not None and eval_success_rate >= min_sr:
+                expert_dir = log_dir / experiment_name
+                expert_dir.mkdir(parents=True, exist_ok=True)
+                expert_path = expert_dir / "weights_expert.pt"
+                algorithm.save(str(expert_path))
+                print(
+                    f"Expert checkpoint saved to {expert_path} "
+                    f"(success_rate {eval_success_rate:.2%} >= {min_sr:.2%})"
+                )
+                if expert_cfg.get("stop_when_ready", False):
+                    training_complete = True
+                    print("Expert success threshold met — stopping training.")
         
         # Checkpointing
         if epoch % checkpoint_freq == 0:
@@ -1244,6 +1438,7 @@ def train(config_path: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to config JSON file")
+    parser.add_argument("--seed", type=int, default=None, help="Override experiment.seed")
     args = parser.parse_args()
     
-    train(args.config)
+    train(args.config, seed_override=args.seed)

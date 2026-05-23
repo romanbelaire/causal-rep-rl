@@ -541,19 +541,29 @@ def plot_representation_metrics(
 
 def find_all_experiments(logs_dir: Path) -> List[Tuple[Path, str]]:
     """
-    Find all experiment CSV files in the logs directory.
-    
+    Find all experiment CSV files under logs_dir (recursive).
+
     Args:
-        logs_dir: Directory containing CSV files
-        
+        logs_dir: Root directory to search for *_metrics.csv
+
     Returns:
-        List of (csv_path, experiment_name) tuples
+        List of (csv_path, experiment_name) tuples sorted by path
     """
     experiments = []
-    for csv_file in logs_dir.glob('*_metrics.csv'):
+    for csv_file in sorted(logs_dir.rglob('*_metrics.csv')):
         exp_name = csv_file.stem.replace('_metrics', '')
         experiments.append((csv_file, exp_name))
-    return sorted(experiments)
+    return experiments
+
+
+def resolve_user_path(p: str) -> Path:
+    """Resolve a CLI path: cwd-relative first, then project root if missing."""
+    path = Path(p)
+    if not path.is_absolute() and not path.exists():
+        alt = Path(__file__).parent.parent / path
+        if alt.exists():
+            path = alt
+    return path
 
 
 def plot_all_metrics(
@@ -613,7 +623,8 @@ def main():
         'csv_files',
         type=str,
         nargs='*',
-        help='Path(s) to CSV metrics file(s). If not provided, will auto-discover all *_metrics.csv files in logs/'
+        help='Path(s) to CSV metrics file(s) and/or directories containing *_metrics.csv '
+             '(directories are searched recursively). If omitted, auto-discover under --logs-dir.'
     )
     parser.add_argument(
         '--output-dir',
@@ -626,7 +637,8 @@ def main():
         type=str,
         nargs='*',
         default=None,
-        help='Names for experiments (default: inferred from filenames). Must match number of CSV files.'
+        help='Names for explicit CSV paths only (default: inferred from filenames). '
+             'Ignored for paths that are directories (names always come from *_metrics.csv stems).'
     )
     parser.add_argument(
         '--title',
@@ -659,22 +671,23 @@ def main():
         experiments = find_all_experiments(logs_dir)
         print(f"Auto-discovered {len(experiments)} experiment(s) in {logs_dir}")
     else:
-        # Use provided CSV files
+        # Use provided paths: each may be a metrics CSV or a directory to scan
         for i, csv_file in enumerate(args.csv_files):
-            csv_path = Path(csv_file)
-            if not csv_path.is_absolute():
-                # Try relative to current directory, then relative to project root
-                if not csv_path.exists():
-                    csv_path = Path(__file__).parent.parent / csv_path
-            
+            csv_path = resolve_user_path(csv_file)
             if not csv_path.exists():
-                print(f"Warning: CSV file not found: {csv_path}", file=sys.stderr)
+                print(f"Warning: Path not found: {csv_path}", file=sys.stderr)
                 continue
-            
+            if csv_path.is_dir():
+                discovered = find_all_experiments(csv_path)
+                if not discovered:
+                    print(f"Warning: No *_metrics.csv under directory: {csv_path}", file=sys.stderr)
+                    continue
+                print(f"Discovered {len(discovered)} experiment(s) under {csv_path}")
+                experiments.extend(discovered)
+                continue
             exp_name = args.experiment_names[i] if args.experiment_names and i < len(args.experiment_names) else None
             if exp_name is None:
                 exp_name = csv_path.stem.replace('_metrics', '')
-            
             experiments.append((csv_path, exp_name))
     
     if len(experiments) == 0:
