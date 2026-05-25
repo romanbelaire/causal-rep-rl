@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.architectures.activation import activation_module
+
 
 class IMPALAPolicy(nn.Module):
     """
@@ -37,15 +39,7 @@ class IMPALAPolicy(nn.Module):
         self.action_dim = action_dim
         self.action_space_type = action_space_type
         
-        # Activation
-        if activation == "relu":
-            self.activation = nn.ReLU()
-        elif activation == "tanh":
-            self.activation = nn.Tanh()
-        elif activation == "elu":
-            self.activation = nn.ELU()
-        else:
-            raise ValueError(f"Unknown activation: {activation}")
+        self.activation = activation_module(activation)
         
         # Input layer
         self.input_layer = nn.Linear(obs_dim, hidden_sizes[0])
@@ -140,14 +134,7 @@ class ResidualBlock(nn.Module):
     
     def __init__(self, hidden_dim: int, activation: str = "relu"):
         super().__init__()
-        if activation == "relu":
-            self.activation = nn.ReLU()
-        elif activation == "tanh":
-            self.activation = nn.Tanh()
-        elif activation == "elu":
-            self.activation = nn.ELU()
-        else:
-            raise ValueError(f"Unknown activation: {activation}")
+        self.activation = activation_module(activation)
         
         self.fc1 = nn.Linear(hidden_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, hidden_dim)

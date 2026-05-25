@@ -8,6 +8,8 @@ For vector observations: Uses MLP layers.
 
 import torch
 import torch.nn as nn
+
+from src.architectures.activation import activation_module
 import torch.nn.functional as F
 import math
 
@@ -55,14 +57,7 @@ class RepresentationNetwork(nn.Module):
         self.use_cnn = use_cnn
         
         # Activation function
-        if activation == "relu":
-            self.activation = nn.ReLU()
-        elif activation == "tanh":
-            self.activation = nn.Tanh()
-        elif activation == "elu":
-            self.activation = nn.ELU()
-        else:
-            raise ValueError(f"Unknown activation: {activation}")
+        self.activation = activation_module(activation)
         
         if use_cnn:
             # CNN-based representation network for image observations

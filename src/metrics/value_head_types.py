@@ -20,7 +20,7 @@ def is_affine_vae_value_head(critic: nn.Module) -> bool:
     nonlinear_layers = [
         m
         for m in critic.value_head
-        if isinstance(m, (nn.ReLU, nn.Tanh, nn.ELU))
+        if isinstance(m, (nn.ReLU, nn.GELU, nn.Tanh, nn.ELU))
     ]
     return len(nonlinear_layers) == 0 and len(linear_layers) == 1
 

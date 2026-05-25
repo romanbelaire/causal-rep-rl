@@ -5,6 +5,8 @@ then value function over latent space.
 
 import torch
 import torch.nn as nn
+
+from src.architectures.activation import activation_module
 import torch.nn.functional as F
 
 from src.architectures.value_heads.quadratic_psd import (
@@ -104,14 +106,7 @@ class VAECritic(nn.Module):
         self.beta = beta
         self.value_head_type = resolve_value_head_type(value_head_type, value_hidden)
 
-        if activation == "relu":
-            act_module = nn.ReLU()
-        elif activation == "tanh":
-            act_module = nn.Tanh()
-        elif activation == "elu":
-            act_module = nn.ELU()
-        else:
-            raise ValueError(f"Unknown activation: {activation}")
+        act_module = activation_module(activation)
 
         encoder_layers = []
         input_dim = obs_dim

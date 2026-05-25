@@ -20,13 +20,13 @@
       "encoder_hidden": [64, 64],
       "decoder_hidden": [64, 64],
       "value_hidden": [64, 64],
-      "activation": "relu",
+      "activation": "gelu",
       "beta": 1.0
     },
     "policy": {
       "type": "impala",
       "hidden_sizes": [64, 64],
-      "activation": "relu",
+      "activation": "gelu",
       "num_residual_blocks": 2
     }
   },

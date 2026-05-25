@@ -5,6 +5,8 @@ Standard Feedforward Neural Network Critic.
 import torch
 import torch.nn as nn
 
+from src.architectures.activation import activation_module
+
 
 class FeedforwardCritic(nn.Module):
     """
@@ -28,15 +30,7 @@ class FeedforwardCritic(nn.Module):
         super().__init__()
         self.obs_dim = obs_dim
         
-        # Activation function
-        if activation == "relu":
-            self.activation = nn.ReLU()
-        elif activation == "tanh":
-            self.activation = nn.Tanh()
-        elif activation == "elu":
-            self.activation = nn.ELU()
-        else:
-            raise ValueError(f"Unknown activation: {activation}")
+        self.activation = activation_module(activation)
         
         # Build network
         layers = []
