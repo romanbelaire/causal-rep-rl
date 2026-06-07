@@ -11,6 +11,7 @@ import pandas as pd
 
 CHECKPOINTS = [1_000_000, 3_000_000, 6_000_000]
 METRICS = [
+    "convexity_kappa_concave_mean",
     "convexity_mu_concave_mean",
     "log_effective_feature_rank_pr",
     "feature_rank_pca",

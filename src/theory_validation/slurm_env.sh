@@ -38,38 +38,34 @@ tv2_srun_train() {
   srun --gres=gpu:1 python -m src.main --config "$config" --seed "$seed"
 }
 
-tv2_exp0_build_zref() {
-  mkdir -p "$TV2_ZREF"
+tv2_require_expert_weights() {
+  local family="$1"
   for S in "${TV2_SEEDS[@]}"; do
-    local expert_rstr="${TV2_LOG}/expert_rstr_minigrid_seed${S}/weights_final.pt"
-    local expert_vae="${TV2_LOG}/expert_vae_minigrid_seed${S}/weights_final.pt"
-    if [[ ! -f "$expert_rstr" ]]; then
-      echo "Missing RSTR expert weights: $expert_rstr"
-      exit 1
+    local dir="${TV2_LOG}/expert_${family}_minigrid_seed${S}"
+    if [[ -f "${dir}/weights_expert.pt" ]]; then
+      continue
     fi
-    if [[ ! -f "$expert_vae" ]]; then
-      echo "Missing VAE expert weights: $expert_vae"
-      exit 1
+    if [[ -f "${dir}/weights_final.pt" ]]; then
+      echo "WARNING [preflight]: expert_${family}_minigrid_seed${S} — no weights_expert.pt; exp1/3 will use weights_final.pt for Z*"
+      continue
     fi
-    python -m src.theory_validation.build_z_ref \
-      --config configs/theory_validation/expert_rstr_minigrid.json \
-      --weights "$expert_rstr" \
-      --output "$TV2_ZREF/rstr_seed${S}.pt" \
-      --seed "$S" --n-episodes 500
-    python -m src.theory_validation.build_z_ref \
-      --config configs/theory_validation/expert_vae_minigrid.json \
-      --weights "$expert_vae" \
-      --output "$TV2_ZREF/vae_seed${S}.pt" \
-      --seed "$S" --n-episodes 500
-    python -m src.theory_validation.validate_z_ref \
-      --config configs/theory_validation/expert_rstr_minigrid.json \
-      --expert-weights "$expert_rstr" \
-      --z-ref "$TV2_ZREF/rstr_seed${S}.pt" \
-      --output "$TV2_ZREF/exp0_validation_rstr_seed${S}.json"
+    echo "Missing expert weights in ${dir} (need weights_expert.pt or weights_final.pt)"
+    if [[ "$family" == "rstr" ]]; then
+      echo "Run: sbatch src/theory_validation/run_exp0_rstr.sh"
+    else
+      echo "Run: sbatch src/theory_validation/run_exp0.sh"
+    fi
+    exit 1
   done
 }
 
+tv2_exp0_build_zref() {
+  bash src/theory_validation/run_exp0_build_zref.sh
+}
+
 tv2_exp12_train() {
+  tv2_require_expert_weights rstr
+  tv2_require_expert_weights vae
   for S in "${TV2_SEEDS[@]}"; do
     tv2_srun_train configs/theory_validation/rstr_lconv_on_minigrid.json "$S"
     tv2_srun_train configs/theory_validation/vae_no_repr_loss_minigrid.json "$S"

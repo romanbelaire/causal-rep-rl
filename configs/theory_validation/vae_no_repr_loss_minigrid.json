@@ -57,8 +57,10 @@
     "collect_occupancy": false,
     "collect_convexity_validation": true,
     "collect_theory_validation": true,
+    "z_ref_expert_family": "vae",
     "convexity_mu_min": 0.02,
     "concavity_epsilon": 0.001,
+    "convexity_directional_epsilon": 0.01,
     "convexity_neighborhood_radius": 0.1
   },
   "logging": {

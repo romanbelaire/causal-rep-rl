@@ -1,7 +1,9 @@
 {
-  "config": "configs/theory_validation/expert_vae_minigrid.json",
-  "weights": "outputs/theory_validation_v2/expert_vae_minigrid_seed43/weights_final.pt",
+  "config": "outputs/theory_validation_v2/generated_configs/expert_vae_minigrid_stochastic_3000.json",
+  "weights": "outputs/theory_validation_v2/expert_vae_minigrid_seed43/weights_expert.pt",
+  "checkpoint_kind": "weights_expert",
+  "use_weights_final": false,
   "n_episodes": 500,
-  "n_states": 1236,
+  "n_states": 1165,
   "seed": 43
 }

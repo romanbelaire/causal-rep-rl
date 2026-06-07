@@ -5,13 +5,13 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from src.algorithms.ppo import PPO
 from src.environments.minigrid_wrapper import MinigridWrapper
 from src.utils.config import Config
 
 
 def load_expert_critic(config_path: str, weights_path: str, device: str) -> nn.Module:
     """Load expert checkpoint; return VAE critic used for Z_ref encoding."""
+    from src.algorithms.ppo import PPO
     from src.main import create_critic, create_policy
 
     config = Config(config_path)
@@ -28,7 +28,13 @@ def load_expert_critic(config_path: str, weights_path: str, device: str) -> nn.M
     policy = create_policy(repr_dim, action_dim, config.config, device, use_repr_input=True)
     critic_input_dim = obs_dim if critic_type == "vae" else repr_dim
     critic = create_critic(critic_input_dim, config.config, device, repr_net=repr_net)
-    algorithm = PPO(policy, critic, config["algorithm"], device, repr_net=repr_net)
+    algo_cfg = dict(config["algorithm"])
+    algo_cfg["mico_loss_coef"] = 0
+    algo_cfg["dbc_loss_coef"] = 0
+    algorithm = PPO(
+        policy, critic, algo_cfg, device,
+        repr_net=repr_net, action_dim=action_dim,
+    )
     algorithm.load(str(weights_path))
     critic.eval()
     env.close()

@@ -1,0 +1,95 @@
+{
+  "experiment": {
+    "name": "theory_v4_vae_baseline_mico",
+    "seed": 42,
+    "device": "cuda"
+  },
+  "environment": {
+    "name": "minigrid",
+    "task": "MiniGrid-Unlock-v0"
+  },
+  "architecture": {
+    "critic": {
+      "type": "vae",
+      "latent_dim": 8,
+      "encoder_hidden": [
+        64,
+        64
+      ],
+      "decoder_hidden": [
+        64,
+        64
+      ],
+      "value_hidden": [
+        64,
+        64
+      ],
+      "activation": "gelu",
+      "beta": 1.0
+    },
+    "policy": {
+      "type": "impala",
+      "hidden_sizes": [
+        64,
+        64
+      ],
+      "activation": "gelu",
+      "num_residual_blocks": 2
+    }
+  },
+  "algorithm": {
+    "type": "ppo",
+    "learning_rate": 0.0001,
+    "value_coef": 0.5,
+    "entropy_coef": 0.01,
+    "vae_coef": 0.1,
+    "representation_loss_coef": 0,
+    "kappa_directional_loss_coef": 0,
+    "z_distill_loss_coef": 0,
+    "mico_loss_coef": 0,
+    "mico_beta": 0.1,
+    "mico_huber_delta": 1.0,
+    "mico_target_update_tau": 0.005,
+    "mico_embed_ball_radius": null,
+    "dbc_loss_coef": 0,
+    "dbc_huber_delta": 1.0,
+    "dbc_target_update_tau": 0.005,
+    "dbc_dynamics_hidden": [
+      64,
+      64
+    ],
+    "dbc_embed_ball_radius": null,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_epsilon": 0.2,
+    "max_grad_norm": 0.2,
+    "batch_size": 256,
+    "num_epochs": 3
+  },
+  "training": {
+    "buffer_size": 4096,
+    "total_epochs": 1500,
+    "total_steps": null,
+    "checkpoint_frequency": 250,
+    "eval_frequency": 100,
+    "metric_evaluation_frequency": 50,
+    "eval_episodes": 100,
+    "eval_deterministic": true
+  },
+  "metrics": {
+    "collect_kl": true,
+    "collect_gradients": true,
+    "collect_hessian": true,
+    "collect_convexity_validation": true,
+    "collect_theory_validation": true,
+    "z_ref_expert_family": "mico",
+    "convexity_mu_min": 0.02,
+    "concavity_epsilon": 0.001,
+    "convexity_directional_epsilon": 0.01,
+    "convexity_neighborhood_radius": 0.1
+  },
+  "logging": {
+    "log_dir": "./outputs/theory_validation_v4",
+    "save_weights": true
+  }
+}

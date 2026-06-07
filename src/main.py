@@ -29,6 +29,41 @@ from src.utils.metric_evaluator import MetricEvaluator
 from src.metrics.mu_latent_validation import verify_mu_latent_agreement
 from src.metrics.value_head_types import is_quadratic_latent_value_head, is_squared_norm_value_head
 
+INTERVENTION_LOG_KEYS = frozenset({
+    "train_kappa_directional_loss",
+    "train_kappa_concave_mean",
+    "train_z_distill_loss",
+    "train_z_distill_mse",
+    "kappa_directional_loss_coef_effective",
+    "z_distill_loss_coef_effective",
+    "train_mico_loss",
+    "train_mico_u_omega_mean",
+    "train_mico_target_mean",
+    "train_mico_reward_pair_dispersion",
+    "train_embedding_norm_mean",
+    "mico_loss_coef_effective",
+    "train_dbc_loss",
+    "train_dbc_w2_mean",
+    "train_dbc_target_mean",
+    "train_dbc_reward_pair_dispersion",
+    "train_dbc_latent_norm_mean",
+    "dbc_loss_coef_effective",
+})
+
+
+def _intervention_metrics_subset(metrics: dict) -> dict:
+    return {
+        k: metrics[k]
+        for k in INTERVENTION_LOG_KEYS
+        if k in metrics and isinstance(metrics[k], (int, float))
+    }
+
+
+def _log_cycle_metrics(logger: CSVLogger, step: int, final_metrics: dict) -> None:
+    logger.log_metrics(step, final_metrics)
+    intervention = _intervention_metrics_subset(final_metrics)
+    logger.log_intervention_loss(step, intervention)
+
 
 def set_seed(seed: int):
     """Set random seeds for reproducibility."""
@@ -537,7 +572,10 @@ def train(config_path: str, seed_override: int | None = None):
     # Create algorithm
     algorithm_type = config["algorithm"]["type"]
     if algorithm_type == "ppo":
-        algorithm = PPO(policy, critic, config["algorithm"], device, repr_net=repr_net)
+        algorithm = PPO(
+            policy, critic, config["algorithm"], device,
+            repr_net=repr_net, action_dim=action_dim,
+        )
     elif algorithm_type == "trpo":
         algorithm = TRPO(policy, critic, config["algorithm"], device, repr_net=repr_net)
     elif algorithm_type == "rstr" or algorithm_type == "representation_trpo":
@@ -572,8 +610,48 @@ def train(config_path: str, seed_override: int | None = None):
     phase_size = config["training"].get("phase_size", None)  # Epochs per phase (None = no phasic training)
     phases = ["representation", "critic", "policy"]  # Order of phases
     
+    # Seed-matched live expert Z*(s) for κ and bounding chain (avoids gt_repr table gaps)
+    metrics_cfg = config["metrics"]
+    z_ref_family = metrics_cfg.get("z_ref_expert_family") or metrics_cfg.get("z_ref_family")
+    if z_ref_family:
+        from src.theory_validation.z_ref_paths import resolve_z_ref_expert
+
+        expert_config, expert_weights, z_ref_ckpt_kind = resolve_z_ref_expert(z_ref_family, seed)
+        metrics_cfg["z_ref_expert_config"] = expert_config
+        metrics_cfg["z_ref_expert_weights"] = expert_weights
+        metrics_cfg["z_ref_expert_checkpoint_kind"] = z_ref_ckpt_kind
+        metrics_cfg.pop("z_ref_path", None)
+        print(
+            f"Z_ref live expert ({z_ref_family}, seed {seed}): {expert_weights} [{z_ref_ckpt_kind}]",
+            flush=True,
+        )
+
     # Create metric evaluator (pass repr_net so it can encode observations for metrics)
-    metric_evaluator = MetricEvaluator(config["metrics"], ground_truth_repr_fn, repr_net=repr_net)
+    metric_evaluator = MetricEvaluator(metrics_cfg, ground_truth_repr_fn, repr_net=repr_net)
+
+    algo_cfg = config["algorithm"]
+    needs_training_z_ref = (
+        algo_cfg.get("kappa_directional_loss_coef", 0) > 0
+        or algo_cfg.get("z_distill_loss_coef", 0) > 0
+    )
+    if needs_training_z_ref:
+        if not z_ref_family:
+            raise ValueError(
+                "kappa_directional_loss_coef or z_distill_loss_coef > 0 requires "
+                "metrics.z_ref_expert_family"
+            )
+        if algorithm_type != "ppo":
+            raise ValueError(
+                f"Z* training losses require algorithm.type ppo, got {algorithm_type}"
+            )
+        from src.theory_validation.z_ref_expert import load_expert_critic
+
+        algorithm.z_ref_expert = load_expert_critic(
+            metrics_cfg["z_ref_expert_config"],
+            metrics_cfg["z_ref_expert_weights"],
+            device,
+        )
+        print("Z_ref expert attached for κ / distill training losses", flush=True)
     
     # Training state
     epoch = 0
@@ -667,6 +745,8 @@ def train(config_path: str, seed_override: int | None = None):
         buffer["dones"] = buffer["dones"].to(device)
         buffer["log_probs"] = buffer["log_probs"].to(device)
         buffer["values"] = buffer["values"].to(device)
+        if buffer.get("next_obs") is not None:
+            buffer["next_obs"] = buffer["next_obs"].to(device)
         
         total_steps_collected += len(buffer["obs"])
         
@@ -694,15 +774,23 @@ def train(config_path: str, seed_override: int | None = None):
                 training_epoch=epoch,
             )
         else:
-            # Vanilla PPO/TRPO: no phase or next_obs
-            update_stats = algorithm.update(
-                buffer["obs"],
-                buffer["actions"],
-                buffer["log_probs"],
-                advantages,
-                returns,
+            update_kwargs = dict(
+                obs=buffer["obs"],
+                actions=buffer["actions"],
+                old_log_probs=buffer["log_probs"],
+                advantages=advantages,
+                returns=returns,
                 training_epoch=epoch,
             )
+            if algorithm_type == "ppo":
+                algo_cfg = config["algorithm"]
+                if (
+                    algo_cfg.get("mico_loss_coef", 0) > 0
+                    or algo_cfg.get("dbc_loss_coef", 0) > 0
+                ):
+                    update_kwargs["rewards"] = buffer["rewards"]
+                    update_kwargs["next_obs"] = buffer["next_obs"]
+            update_stats = algorithm.update(**update_kwargs)
         
         # Accumulate metrics for phasic training
         if phase_size is not None:
@@ -860,7 +948,7 @@ def train(config_path: str, seed_override: int | None = None):
                         old_occupancy = compute_occupancy_measure(buffer["obs"].cpu(), discretize=True)
                 
                 # Log accumulated metrics for the completed cycle
-                logger.log_metrics(total_steps_collected, final_metrics)
+                _log_cycle_metrics(logger, total_steps_collected, final_metrics)
                 
                 # Reset for next cycle
                 non_phasic_cycle_metrics = None
@@ -928,7 +1016,7 @@ def train(config_path: str, seed_override: int | None = None):
                         final_metrics[key] = np.mean(values)
             
             # Log accumulated metrics for the completed cycle
-            logger.log_metrics(total_steps_collected, final_metrics)
+            _log_cycle_metrics(logger, total_steps_collected, final_metrics)
             
             # Reset for next cycle
             cycle_metrics = None
@@ -1423,7 +1511,7 @@ def train(config_path: str, seed_override: int | None = None):
                 if values:
                     final_metrics[key] = np.mean(values)
         
-        logger.log_metrics(total_steps_collected, final_metrics)
+        _log_cycle_metrics(logger, total_steps_collected, final_metrics)
         epochs_in_final_cycle = non_phasic_cycle_metrics["epoch_end"] - non_phasic_cycle_metrics["epoch_start"] + 1
         print(f"Final cycle logged: epochs {non_phasic_cycle_metrics['epoch_start']}-{non_phasic_cycle_metrics['epoch_end']} ({epochs_in_final_cycle} epochs)")
     

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Theory validation v2 — Exp 3 (self-contained):
-#   1. RSTR repr_coef on vs off (3 seeds)
-#   2. Checkpoint bootstrap analysis + plots
+#   H1/H2 RSTR repr-loss ablation (repr on vs off, 3 seeds); VAE baseline is Exp 1.
+#   Requires run_exp0_rstr.sh (weights_expert.pt per seed).
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
@@ -19,7 +19,8 @@
 set -euo pipefail
 source src/theory_validation/slurm_env.sh
 
-echo "=== Exp 3: training ==="
+echo "=== Exp 3: training (RSTR repr on/off; requires RSTR experts) ==="
+tv2_require_expert_weights rstr
 for S in "${TV2_SEEDS[@]}"; do
   tv2_srun_train configs/theory_validation/exp3_rstr_repr_on.json "$S"
   tv2_srun_train configs/theory_validation/exp3_rstr_repr_off.json "$S"

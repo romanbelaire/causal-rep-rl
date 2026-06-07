@@ -23,9 +23,23 @@ from src.theory_validation.aggregate_seeds import (
 COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 CHECKPOINTS = [1_000_000, 3_000_000, 6_000_000]
 
+# Directional κ toward Z* (step 2); fall back to global λ_min proxies in older CSVs.
+CURVATURE_CONCAVE = ("convexity_kappa_concave_mean", "convexity_mu_concave_mean")
+CURVATURE_PCT_BAD = ("convexity_pct_negative_kappa", "convexity_pct_concave")
+
+
+def _pick_metric_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str:
+    for col in candidates:
+        if col in df.columns and df[col].notna().any():
+            return col
+    return candidates[-1]
+
 
 def load_metrics(csv_path: Path) -> pd.DataFrame:
-    df = pd.read_csv(csv_path, na_values=["", "nan", "NaN", "None"])
+    try:
+        df = pd.read_csv(csv_path, na_values=["", "nan", "NaN", "None"])
+    except pd.errors.ParserError as e:
+        raise pd.errors.ParserError(f"{csv_path}: {e}") from e
     for col in df.columns:
         if col == "eval_action_distribution":
             continue
@@ -61,25 +75,35 @@ def _seed_label(name: str, dfs: list[pd.DataFrame]) -> str:
     return f"{short} (n={ns})" if ns > 1 else short
 
 
-def plot_exp1_mu_concave_rank(
+def plot_exp1_curvature_rank(
     experiments: list[tuple[list[pd.DataFrame], str]],
     output_dir: Path,
     rank_col: str = "log_effective_feature_rank_pr",
     rank_label: str = "log effective rank (PR)",
-    output_name: str = "exp1_mu_concave_vs_rank.png",
+    output_name: str | None = None,
+    rank_suffix: str = "rank",
     title_suffix: str = "participation ratio",
 ):
+    concave_col = _pick_metric_column(experiments[0][0][0], CURVATURE_CONCAVE)
+    if output_name is None:
+        stem = "kappa_concave" if concave_col.startswith("convexity_kappa") else "mu_concave"
+        output_name = f"exp1_{stem}_vs_{rank_suffix}.png"
+    pct_col = _pick_metric_column(experiments[0][0][0], CURVATURE_PCT_BAD)
+    using_kappa = concave_col.startswith("convexity_kappa")
+    curv_label = "κ_concave" if using_kappa else "μ_concave (λ_min proxy)"
+    pct_label = "pct κ<0" if using_kappa else "pct_concave"
+
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
     fig.suptitle(
-        f"Exp 1: μ_concave vs effective feature rank ({title_suffix}, mean ± std over seeds)",
+        f"Exp 1: {curv_label} vs effective feature rank ({title_suffix}, mean ± std over seeds)",
         fontweight="bold",
     )
 
     for i, (dfs, name) in enumerate(experiments):
         color = COLORS[i % len(COLORS)]
         label = _seed_label(name, dfs)
-        steps, mu_c, mu_std = aggregate_series(dfs, "convexity_mu_concave_mean")
-        _, pct_c, pct_std = aggregate_series(dfs, "convexity_pct_concave")
+        steps, mu_c, mu_std = aggregate_series(dfs, concave_col)
+        _, pct_c, pct_std = aggregate_series(dfs, pct_col)
         _, log_rank, lr_std = aggregate_series(dfs, rank_col)
         n = min(len(steps), len(mu_c), len(pct_c), len(log_rank))
         if n < 3:
@@ -91,18 +115,19 @@ def plot_exp1_mu_concave_rank(
 
         rs = []
         for df in dfs:
-            _, m = metric_series(df, "convexity_mu_concave_mean")
+            col_c = _pick_metric_column(df, CURVATURE_CONCAVE)
+            _, m = metric_series(df, col_c)
             _, r = metric_series(df, rank_col)
             nn = min(len(m), len(r))
-            if nn >= 3:
+            if nn >= 3 and m[:nn].std() > 1e-12 and r[:nn].std() > 1e-12:
                 rs.append(stats.pearsonr(m[:nn], r[:nn])[0])
         r_mean = float(np.mean(rs)) if rs else float("nan")
         axes[1, 1].scatter(log_rank[:n], mu_c[:n], c=color, alpha=0.45, s=14, label=f"{label} r̄={r_mean:.2f}")
 
-    axes[0, 0].set_title("μ_concave (batch mean)")
-    axes[0, 1].set_title("pct_concave")
+    axes[0, 0].set_title(f"{curv_label} (batch mean)")
+    axes[0, 1].set_title(pct_label)
     axes[1, 0].set_title(rank_label)
-    axes[1, 1].set_title("μ_concave vs rank")
+    axes[1, 1].set_title(f"{curv_label} vs rank")
     axes[1, 1].set_xlabel(rank_label)
     for ax in axes.ravel():
         if ax is not axes[1, 1]:
@@ -114,8 +139,10 @@ def plot_exp1_mu_concave_rank(
 
 
 def plot_exp2_lagged_ccf(experiments: list[tuple[list[pd.DataFrame], str]], output_dir: Path, max_lag: int = 5):
+    concave_col = _pick_metric_column(experiments[0][0][0], CURVATURE_CONCAVE)
+    curv_label = "κ_concave" if concave_col.startswith("convexity_kappa") else "μ_concave"
     fig, ax = plt.subplots(figsize=(10, 5))
-    fig.suptitle("Exp 2: lagged CCF(μ_concave, return) — mean ± std over seeds", fontweight="bold")
+    fig.suptitle(f"Exp 2: lagged CCF({curv_label}, return) — mean ± std over seeds", fontweight="bold")
 
     for i, (dfs, name) in enumerate(experiments):
         color = COLORS[i % len(COLORS)]
@@ -123,7 +150,8 @@ def plot_exp2_lagged_ccf(experiments: list[tuple[list[pd.DataFrame], str]], outp
         ccfs = []
         lags_ref = None
         for df in dfs:
-            _, mu_c = metric_series(df, "convexity_mu_concave_mean")
+            col_c = _pick_metric_column(df, CURVATURE_CONCAVE)
+            _, mu_c = metric_series(df, col_c)
             _, ret = metric_series(df, "mean_episode_return")
             nn = min(len(mu_c), len(ret))
             if nn < 8:
@@ -145,7 +173,7 @@ def plot_exp2_lagged_ccf(experiments: list[tuple[list[pd.DataFrame], str]], outp
         _plot_mean_std(ax, lags_ref, ccf_mean, ccf_std, label, color)
 
     ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
-    ax.set_xlabel("lag k (μ_concave leads return by k metric points)")
+    ax.set_xlabel(f"lag k ({curv_label} leads return by k metric points)")
     ax.set_ylabel("cross-correlation")
     ax.legend()
     fig.tight_layout()
@@ -313,13 +341,13 @@ def main():
     if args.exp in ("all", "1"):
         exp1 = pick(lambda k: ("rstr_lconv_on" in k or "vae" in k) and "repr_" not in k and "exp4" not in k and "exp5" not in k and "expert" not in k)
         if exp1:
-            plot_exp1_mu_concave_rank(exp1, args.output_dir)
-            plot_exp1_mu_concave_rank(
+            plot_exp1_curvature_rank(exp1, args.output_dir)
+            plot_exp1_curvature_rank(
                 exp1,
                 args.output_dir,
                 rank_col="log_effective_feature_rank_pca",
                 rank_label="log effective rank (PCA)",
-                output_name="exp1_mu_concave_vs_pca_rank.png",
+                rank_suffix="pca_rank",
                 title_suffix="PCA",
             )
 
@@ -337,6 +365,7 @@ def main():
                 by_experiment[off_key],
                 args.output_dir,
                 [
+                    "convexity_kappa_concave_mean",
                     "convexity_mu_concave_mean",
                     "log_effective_feature_rank_pr",
                     "log_effective_feature_rank_pca",

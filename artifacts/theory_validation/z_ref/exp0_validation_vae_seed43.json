@@ -1,0 +1,9 @@
+{
+  "n_z_ref_grad_samples": 14400,
+  "grad_z_ref_mean": 0.007345582822971563,
+  "grad_z_ref_max": 0.007785261608660221,
+  "grad_subopt_mean": null,
+  "grad_ratio_subopt_over_expert": null,
+  "color_aug_z_dist_mean": 0.0,
+  "n_z_ref_keys": 1165
+}

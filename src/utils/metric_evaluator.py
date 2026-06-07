@@ -216,14 +216,20 @@ class MetricEvaluator:
                 z_current = obs_sample
             else:
                 z_current = obs_sample_raw
-            
+
+            z_star_batch = self._lookup_z_ref_batch(
+                obs_sample_raw, gt_sample, z_current.device
+            )
+
             diagnostic_results = diagnostic_step(
                 critic=critic,
                 z=z_current,
                 z_old=self.prev_z,
+                z_star=z_star_batch,
                 mu_min=self.config.get("convexity_mu_min", 0.05),
                 neighborhood_radius=self.config.get("convexity_neighborhood_radius", 0.1),
                 concavity_epsilon=self.config.get("concavity_epsilon", 1e-3),
+                directional_epsilon=self.config.get("convexity_directional_epsilon", 1e-2),
                 step=self.convexity_step,
             )
             
@@ -240,6 +246,17 @@ class MetricEvaluator:
                 "neighborhood_max_distance": diagnostic_results["neighborhood_max_distance"],
                 "neighborhood_mean_distance": diagnostic_results["neighborhood_mean_distance"],
             })
+            if diagnostic_results["convexity_kappa_mean"] is not None:
+                metrics.update({
+                    "convexity_kappa": diagnostic_results["convexity_kappa"],
+                    "convexity_kappa_min": diagnostic_results["convexity_kappa_min"],
+                    "convexity_kappa_max": diagnostic_results["convexity_kappa_max"],
+                    "convexity_kappa_mean": diagnostic_results["convexity_kappa_mean"],
+                    "convexity_kappa_concave": diagnostic_results["convexity_kappa_concave"],
+                    "convexity_kappa_concave_mean": diagnostic_results["convexity_kappa_concave_mean"],
+                    "convexity_pct_negative_kappa": diagnostic_results["convexity_pct_negative_kappa"],
+                    "convexity_kappa_n_valid": diagnostic_results["convexity_kappa_n_valid"],
+                })
             
             if diagnostic_results["bound_correlation"] is not None:
                 metrics.update({
@@ -268,18 +285,18 @@ class MetricEvaluator:
             smoothness_L = metrics.get("convexity_max_eigenvalue", None)
             mu_concave = metrics.get("convexity_mu_concave", 0.0)
             pct_concave = metrics.get("convexity_pct_concave", 0.0)
+            kappa_concave = metrics.get("convexity_kappa_concave")
+            pct_negative_kappa = metrics.get("convexity_pct_negative_kappa")
+            curvature_concave = kappa_concave if kappa_concave is not None else mu_concave
+            curvature_pct_bad = (
+                pct_negative_kappa if pct_negative_kappa is not None else pct_concave
+            )
 
-            z_ref_batch = None
+            z_ref_batch = self._lookup_z_ref_batch(
+                obs_sample_raw, gt_sample, z_theory.device
+            )
             if self.z_ref_critic is not None:
-                obs_for_ref = obs_sample_raw.to(self.z_ref_device)
-                z_ref_batch = encode_z_ref_batch(self.z_ref_critic, obs_for_ref).to(z_theory.device)
                 metrics["z_ref_live_expert"] = 1.0
-            elif self.z_ref_store is not None:
-                if gt_sample is None:
-                    raise ValueError(
-                        "z_ref_path is set but gt_repr_buffer was not passed to evaluate_all"
-                    )
-                z_ref_batch = self.z_ref_store.lookup_batch(gt_sample).to(z_theory.device)
 
             chain_metrics = compute_bounding_chain_metrics(
                 critic=critic,
@@ -289,8 +306,8 @@ class MetricEvaluator:
                 running_best_return=max(self.running_best_return, mean_return),
                 smoothness_L=smoothness_L,
                 z_ref=z_ref_batch,
-                mu_concave=mu_concave,
-                pct_concave=pct_concave,
+                mu_concave=curvature_concave,
+                pct_concave=curvature_pct_bad,
                 c_z=self.config.get("chain_c_z", 1.0),
                 c1=self.config.get("chain_c1", 1.0),
                 bound_unreliable_pct_threshold=self.config.get(
@@ -299,7 +316,9 @@ class MetricEvaluator:
             )
             metrics.update(chain_metrics)
 
-            mu_val = metrics.get("convexity_mu", metrics.get("hessian_min_eigenvalue", 0.05))
+            mu_val = metrics.get("convexity_kappa_min")
+            if mu_val is None:
+                mu_val = metrics.get("convexity_mu", metrics.get("hessian_min_eigenvalue", 0.05))
             direction_metrics = check_chain_directionality(
                 performance_gap=chain_metrics["chain_performance_gap"],
                 grad_z_v=chain_metrics["chain_grad_z_v"],
@@ -310,8 +329,29 @@ class MetricEvaluator:
             metrics.update(direction_metrics)
 
             metrics["theory_mu_vs_rank_product"] = mu_val * rank_metrics["log_effective_feature_rank_pr"]
+            if metrics.get("convexity_kappa_mean") is not None:
+                metrics["theory_kappa_vs_rank_product"] = (
+                    metrics["convexity_kappa_mean"] * rank_metrics["log_effective_feature_rank_pr"]
+                )
         
         return metrics
+
+    def _lookup_z_ref_batch(
+        self,
+        obs_sample_raw: torch.Tensor,
+        gt_sample: torch.Tensor | None,
+        device: torch.device,
+    ) -> torch.Tensor | None:
+        if self.z_ref_critic is not None:
+            obs_for_ref = obs_sample_raw.to(self.z_ref_device)
+            return encode_z_ref_batch(self.z_ref_critic, obs_for_ref).to(device)
+        if self.z_ref_store is not None:
+            if gt_sample is None:
+                raise ValueError(
+                    "z_ref_path is set but gt_repr_buffer was not passed to evaluate_all"
+                )
+            return self.z_ref_store.lookup_batch(gt_sample).to(device)
+        return None
 
     def _get_latent_batch(
         self,

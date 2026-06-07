@@ -53,10 +53,10 @@
     "collect_hessian": true,
     "collect_convexity_validation": true,
     "collect_theory_validation": true,
-    "z_ref_expert_config": "configs/theory_validation/expert_vae_minigrid.json",
-    "z_ref_expert_weights": "outputs/theory_validation_v2/expert_vae_minigrid_seed42/weights_final.pt",
+    "z_ref_expert_family": "vae",
     "convexity_mu_min": 0.02,
     "concavity_epsilon": 0.001,
+    "convexity_directional_epsilon": 0.01,
     "bound_unreliable_pct_threshold": 0.10
   },
   "logging": {

@@ -20,6 +20,7 @@ from src.main import (
 from src.algorithms.ppo import PPO
 from src.utils.config import Config
 from src.theory_validation.z_ref_store import ZRefStore, build_table_from_rollout
+from src.theory_validation.z_ref_paths import resolve_expert_weights_file
 
 
 def _setup_from_config(config_path: str, weights_path: Path, device: str, seed: int):
@@ -84,11 +85,25 @@ def roll_expert_trajectories(
 def main():
     parser = argparse.ArgumentParser(description="Build Z_ref table from expert checkpoint")
     parser.add_argument("--config", type=str, required=True)
-    parser.add_argument("--weights", type=str, required=True, help="Path to weights_expert.pt")
+    parser.add_argument(
+        "--weights",
+        type=str,
+        required=True,
+        help="Expert run dir or path to weights_expert.pt / weights_final.pt",
+    )
+    parser.add_argument(
+        "--use-weights-final",
+        action="store_true",
+        help="Load weights_final.pt from the expert run dir (e.g. 92% success without 95% gate).",
+    )
     parser.add_argument("--output", type=str, required=True, help="Output .pt path")
     parser.add_argument("--n-episodes", type=int, default=500)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
+
+    weights_path, checkpoint_kind = resolve_expert_weights_file(
+        args.weights, use_weights_final=args.use_weights_final
+    )
 
     config = Config(args.config)
     device = config.get("experiment.device", "cpu")
@@ -96,7 +111,7 @@ def main():
         device = "cpu"
 
     env, policy, critic, repr_net, device = _setup_from_config(
-        args.config, Path(args.weights), device, args.seed
+        args.config, weights_path, device, args.seed
     )
     gt_list, z_list = roll_expert_trajectories(
         env, policy, critic, repr_net, device, args.n_episodes
@@ -105,7 +120,9 @@ def main():
     store = ZRefStore(table)
     metadata = {
         "config": args.config,
-        "weights": args.weights,
+        "weights": str(weights_path),
+        "checkpoint_kind": checkpoint_kind,
+        "use_weights_final": args.use_weights_final,
         "n_episodes": args.n_episodes,
         "n_states": len(table),
         "seed": args.seed,

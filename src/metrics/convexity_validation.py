@@ -22,6 +22,83 @@ from src.metrics.value_head_types import is_affine_vae_value_head, is_quadratic_
 from src.metrics.value_head_mu import get_analytic_mu_latent
 
 
+def _value_on_z_batch(critic: nn.Module, z: torch.Tensor) -> torch.Tensor:
+    """V(z) per row [N]."""
+    if hasattr(critic, "value_head"):
+        return critic.value_head(z).squeeze(-1)
+    return critic(z).squeeze(-1)
+
+
+def directional_curvature_toward_z_star(
+    critic: nn.Module,
+    z: torch.Tensor,
+    z_star: torch.Tensor,
+    epsilon: float = 1e-2,
+    min_distance: float = 1e-6,
+    concavity_epsilon: float = 1e-3,
+) -> Dict[str, Any]:
+    """
+    Directional curvature toward Z* along Δ = (Z − Z*) / ‖Z − Z*‖:
+
+        κ(Z, Z*) = [V(Z* + εΔ) − V(Z*) − ε∇V(Z*)·Δ] / (ε²/2)
+
+    This is the second-order Taylor remainder along the proof direction, not global λ_min.
+    """
+    if z.dim() == 1:
+        z = z.unsqueeze(0)
+    if z_star.dim() == 1:
+        z_star = z_star.unsqueeze(0)
+    if z.shape != z_star.shape:
+        raise ValueError(f"Shape mismatch: z {z.shape} vs z_star {z_star.shape}")
+
+    if is_affine_vae_value_head(critic):
+        return {
+            "kappa": 0.0,
+            "kappa_min": 0.0,
+            "kappa_max": 0.0,
+            "kappa_mean": 0.0,
+            "kappa_concave": 0.0,
+            "kappa_concave_mean": 0.0,
+            "pct_negative_kappa": 0.0,
+            "n_valid": 0,
+            "affine_by_construction": True,
+        }
+
+    delta_vec = z - z_star
+    distances = torch.norm(delta_vec, dim=1)
+    valid = distances > min_distance
+    if not valid.any():
+        raise ValueError(
+            "No samples with ‖Z − Z*‖ > min_distance; cannot estimate directional κ"
+        )
+
+    z_v = z[valid]
+    z_s = z_star[valid]
+    delta = delta_vec[valid] / distances[valid].unsqueeze(1)
+
+    z_s_grad = z_s.detach().requires_grad_(True)
+    v0 = _value_on_z_batch(critic, z_s_grad)
+    grad_v = torch.autograd.grad(v0.sum(), z_s_grad, create_graph=True)[0]
+    dir_deriv = (grad_v * delta).sum(dim=1)
+
+    z_pert = z_s_grad + epsilon * delta
+    v_pert = _value_on_z_batch(critic, z_pert)
+    denom = 0.5 * epsilon ** 2
+    kappa_batch = (v_pert - v0 - epsilon * dir_deriv) / denom
+
+    kappa_concave_batch = (-kappa_batch).clamp(min=0.0)
+    return {
+        "kappa": kappa_batch.min().item(),
+        "kappa_min": kappa_batch.min().item(),
+        "kappa_max": kappa_batch.max().item(),
+        "kappa_mean": kappa_batch.mean().item(),
+        "kappa_concave": kappa_concave_batch.max().item(),
+        "kappa_concave_mean": kappa_concave_batch.mean().item(),
+        "pct_negative_kappa": (kappa_batch < -concavity_epsilon).float().mean().item(),
+        "n_valid": int(valid.sum().item()),
+    }
+
+
 def estimate_local_convexity(
     critic: nn.Module,
     z: torch.Tensor,
@@ -365,9 +442,11 @@ def diagnostic_step(
     critic: nn.Module,
     z: torch.Tensor,
     z_old: Optional[torch.Tensor] = None,
+    z_star: Optional[torch.Tensor] = None,
     mu_min: float = 0.05,
     neighborhood_radius: float = 0.1,
     concavity_epsilon: float = 1e-3,
+    directional_epsilon: float = 1e-2,
     step: int = 0,
 ) -> Dict[str, Any]:
     """
@@ -407,6 +486,36 @@ def diagnostic_step(
         "convexity_mu_concave_mean": convexity_results["mu_concave_mean"],
         "convexity_pct_concave": convexity_results["pct_concave"],
     })
+
+    if z_star is not None:
+        kappa_results = directional_curvature_toward_z_star(
+            critic,
+            z,
+            z_star,
+            epsilon=directional_epsilon,
+            concavity_epsilon=concavity_epsilon,
+        )
+        results.update({
+            "convexity_kappa": kappa_results["kappa"],
+            "convexity_kappa_min": kappa_results["kappa_min"],
+            "convexity_kappa_max": kappa_results["kappa_max"],
+            "convexity_kappa_mean": kappa_results["kappa_mean"],
+            "convexity_kappa_concave": kappa_results["kappa_concave"],
+            "convexity_kappa_concave_mean": kappa_results["kappa_concave_mean"],
+            "convexity_pct_negative_kappa": kappa_results["pct_negative_kappa"],
+            "convexity_kappa_n_valid": kappa_results["n_valid"],
+        })
+    else:
+        results.update({
+            "convexity_kappa": None,
+            "convexity_kappa_min": None,
+            "convexity_kappa_max": None,
+            "convexity_kappa_mean": None,
+            "convexity_kappa_concave": None,
+            "convexity_kappa_concave_mean": None,
+            "convexity_pct_negative_kappa": None,
+            "convexity_kappa_n_valid": None,
+        })
     
     # 2. Verify representation bound (if z_old provided)
     if z_old is not None:
@@ -431,7 +540,7 @@ def diagnostic_step(
     
     # 3. Check neighborhood membership
     neighborhood_results = check_neighborhood_membership(
-        critic, z, z_star=None, radius=neighborhood_radius
+        critic, z, z_star=z_star, radius=neighborhood_radius
     )
     results.update({
         "neighborhood_pct": neighborhood_results["pct_in_neighborhood"],
@@ -485,6 +594,8 @@ def diagnostic_step(
     
     # Print summary
     print(f"Step {step}: μ={mu:.4f}, ", end="")
+    if results.get("convexity_kappa_mean") is not None:
+        print(f"κ_mean={results['convexity_kappa_mean']:.4f}, ", end="")
     if correlation is not None:
         print(f"corr(ΔZ, ∇V)={correlation:.3f}, ", end="")
     print(f"in_N={pct_in_neighborhood:.1%}")

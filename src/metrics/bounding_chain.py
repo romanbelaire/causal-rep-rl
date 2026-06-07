@@ -62,8 +62,8 @@ def compute_bounding_chain_metrics(
         running_best_return: Running maximum return as J* proxy
         smoothness_L: Top Hessian eigenvalue proxy for L-smoothness
         z_ref: Per-sample Z*(s) from expert table [N, d]
-        mu_concave: -min(λ_min, 0) batch max for scaled RHS
-        pct_concave: Fraction of batch with λ_min < -ε
+        mu_concave: Concavity scale for scaled RHS; prefer max(-κ, 0) when directional κ is logged
+        pct_concave: Fraction of batch with bad curvature (λ_min < -ε or κ < -ε)
         c_z: Lemma zgrad constant scale
         c1: Causal theorem constant scale
         bound_unreliable_pct_threshold: Flag bound when pct_concave exceeds this

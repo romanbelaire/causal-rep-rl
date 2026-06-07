@@ -1,6 +1,6 @@
 #!/bin/bash
 # Theory validation v2 — Exp 4 (self-contained):
-#   1. Build Z_ref from expert checkpoints (requires Exp 0 weights on disk)
+#   1. Rebuild Z_ref tables from weights_expert.pt (requires run_exp0.sh + run_exp0_rstr.sh)
 #   2. RSTR + VAE bounding-chain runs (seed 42)
 #   3. Plots
 #SBATCH --nodes=1
@@ -20,8 +20,8 @@
 set -euo pipefail
 source src/theory_validation/slurm_env.sh
 
-echo "=== Exp 4: build Z_ref (needs expert_rstr/vae from Exp 0) ==="
-tv2_exp0_build_zref
+echo "=== Exp 4: rebuild Z_ref (run_exp0_build_zref.sh) ==="
+bash src/theory_validation/run_exp0_build_zref.sh
 
 echo "=== Exp 4: bounding-chain training ==="
 tv2_srun_train configs/theory_validation/exp4_rstr_chain_minigrid.json 42

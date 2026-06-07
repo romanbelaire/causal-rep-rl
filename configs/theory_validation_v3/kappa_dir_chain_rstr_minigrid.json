@@ -1,0 +1,68 @@
+{
+  "experiment": {
+    "name": "theory_v3_kappa_dir_chain_rstr",
+    "seed": 42,
+    "device": "cuda"
+  },
+  "environment": {
+    "name": "minigrid",
+    "task": "MiniGrid-Unlock-v0"
+  },
+  "architecture": {
+    "critic": {
+      "type": "vae",
+      "latent_dim": 8,
+      "encoder_hidden": [64, 64],
+      "decoder_hidden": [64, 64],
+      "value_hidden": [64, 64],
+      "activation": "gelu",
+      "beta": 1.0
+    },
+    "policy": {
+      "type": "impala",
+      "hidden_sizes": [64, 64],
+      "activation": "gelu",
+      "num_residual_blocks": 2
+    }
+  },
+  "algorithm": {
+    "type": "ppo",
+    "learning_rate": 1e-4,
+    "value_coef": 0.5,
+    "entropy_coef": 0.01,
+    "vae_coef": 0.1,
+    "representation_loss_coef": 0,
+    "kappa_directional_loss_coef": 0.1,
+    "z_distill_loss_coef": 0,
+    "kappa_directional_epsilon": 0.01,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_epsilon": 0.2,
+    "max_grad_norm": 0.2,
+    "batch_size": 256,
+    "num_epochs": 3
+  },
+  "training": {
+    "buffer_size": 4096,
+    "total_epochs": 1500,
+    "metric_evaluation_frequency": 50,
+    "eval_frequency": 100,
+    "eval_episodes": 100,
+    "eval_deterministic": true
+  },
+  "metrics": {
+    "collect_kl": true,
+    "collect_gradients": true,
+    "collect_hessian": true,
+    "collect_convexity_validation": true,
+    "collect_theory_validation": true,
+    "z_ref_expert_family": "rstr",
+    "convexity_mu_min": 0.02,
+    "concavity_epsilon": 0.001,
+    "convexity_directional_epsilon": 0.01,
+    "bound_unreliable_pct_threshold": 0.10
+  },
+  "logging": {
+    "log_dir": "./outputs/theory_validation_v3"
+  }
+}

@@ -1,7 +1,9 @@
 #!/bin/bash
 # Theory validation v2 — Exp 1 (self-contained):
-#   1. Train RSTR (lconv on) + VAE (no repr loss), 3 seeds
-#   2. Plot μ_concave vs rank (PR + PCA)
+#   H1/H2 for both model families (3 seeds each):
+#     - RSTR (repr loss + lconv): theory_rstr_lconv_on_v2 → z_ref_expert_family rstr
+#     - VAE baseline (no repr loss): theory_vae_ppo_no_repr_loss_v2 → z_ref_expert_family vae
+#   Plots: κ_concave vs rank (PR + PCA); μ_concave fallback if κ absent
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1

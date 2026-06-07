@@ -2,14 +2,26 @@
 Proximal Policy Optimization (PPO) algorithm implementation.
 """
 
+import copy
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
+from src.architectures.latent_dynamics import LatentDynamicsModel
+from src.theory_validation.z_ref_expert import encode_z_ref_batch
+from src.utils.bisimulation_utils import VAEEncoderTarget, soft_update_module
+from src.utils.dbc_loss import compute_dbc_loss
+from src.utils.mico_loss import compute_mico_loss
 from src.utils.representation_loss import (
     compute_representation_loss_with_convexity,
     effective_representation_loss_coef,
+)
+from src.utils.z_star_training_losses import (
+    compute_kappa_directional_loss,
+    compute_z_distill_loss,
+    effective_intervention_loss_coef,
 )
 
 
@@ -25,6 +37,7 @@ class PPO:
         config: dict,
         device: str = "cuda",
         repr_net: nn.Module = None,
+        action_dim: int | None = None,
     ):
         """
         Initialize PPO.
@@ -57,15 +70,68 @@ class PPO:
         self.convexity_coef = config.get("convexity_coef", 1.0)  # Coefficient for μ term in loss
         self.grad_norm_power = config.get("grad_norm_power", 1.0)  # Power for gradient norm (1.0 = L2 norm, 2.0 = squared)
         self.hessian_compute_freq = config.get("hessian_compute_freq", 10)  # Compute Hessian every N steps
+        self.kappa_directional_loss_coef = config.get("kappa_directional_loss_coef", 0.0)
+        self.z_distill_loss_coef = config.get("z_distill_loss_coef", 0.0)
+        self.kappa_directional_loss_coef_warmup_epochs = config.get(
+            "kappa_directional_loss_coef_warmup_epochs", 0
+        )
+        self.z_distill_loss_coef_warmup_epochs = config.get(
+            "z_distill_loss_coef_warmup_epochs", 0
+        )
+        self.kappa_directional_epsilon = config.get("kappa_directional_epsilon", 0.01)
+        self.kappa_directional_min_distance = config.get("kappa_directional_min_distance", 1e-6)
+        self.mico_loss_coef = config.get("mico_loss_coef", 0.0)
+        self.mico_loss_coef_warmup_epochs = config.get("mico_loss_coef_warmup_epochs", 0)
+        self.mico_beta = config.get("mico_beta", 0.1)
+        self.mico_huber_delta = config.get("mico_huber_delta", 1.0)
+        self.mico_target_update_tau = config.get("mico_target_update_tau", 0.005)
+        self.mico_embed_ball_radius = config.get("mico_embed_ball_radius", None)
+        self.dbc_loss_coef = config.get("dbc_loss_coef", 0.0)
+        self.dbc_loss_coef_warmup_epochs = config.get("dbc_loss_coef_warmup_epochs", 0)
+        self.dbc_gamma = config.get("dbc_gamma", None)
+        self.dbc_huber_delta = config.get("dbc_huber_delta", 1.0)
+        self.dbc_target_update_tau = config.get("dbc_target_update_tau", 0.005)
+        self.dbc_embed_ball_radius = config.get("dbc_embed_ball_radius", None)
+        self.dbc_dynamics_hidden = config.get("dbc_dynamics_hidden", [64, 64])
+        self.dbc_dynamics_activation = config.get("dbc_dynamics_activation", "gelu")
+        if self.mico_loss_coef > 0 and self.dbc_loss_coef > 0:
+            raise ValueError("mico_loss_coef and dbc_loss_coef are mutually exclusive")
         self.max_grad_norm = config.get("max_grad_norm", 0.5)
         self.batch_size = config.get("batch_size", 64)
         self.num_epochs = config.get("num_epochs", 4)
+        self.z_ref_expert = None
+        self.encoder_target = None
+        self.latent_dynamics = None
+        self.latent_dynamics_target = None
+
+        if self.mico_loss_coef > 0:
+            if not hasattr(self.critic, "encode"):
+                raise ValueError("MICo loss requires VAE critic with encode()")
+            self.encoder_target = VAEEncoderTarget(self.critic).to(device)
+
+        if self.dbc_loss_coef > 0:
+            if action_dim is None:
+                raise ValueError("dbc_loss_coef > 0 requires action_dim")
+            if not hasattr(self.critic, "encode"):
+                raise ValueError("DBC loss requires VAE critic with encode()")
+            latent_dim = self.critic.latent_dim
+            self.latent_dynamics = LatentDynamicsModel(
+                latent_dim,
+                action_dim,
+                self.dbc_dynamics_hidden,
+                self.dbc_dynamics_activation,
+            ).to(device)
+            self.latent_dynamics_target = copy.deepcopy(self.latent_dynamics)
+            for param in self.latent_dynamics_target.parameters():
+                param.requires_grad = False
         
         # Optimizers - always use unified optimizer for all models
         # Unified optimizer includes all parameters: policy + critic + repr_net (if exists)
         all_params = list(self.policy.parameters()) + list(self.critic.parameters())
         if self.repr_net is not None:
             all_params = list(self.repr_net.parameters()) + all_params
+        if self.latent_dynamics is not None:
+            all_params = list(self.latent_dynamics.parameters()) + all_params
         self.unified_optimizer = optim.Adam(all_params, lr=self.lr)
         self.policy_optimizer = None
         self.critic_optimizer = None
@@ -121,6 +187,8 @@ class PPO:
         old_log_probs: torch.Tensor,
         advantages: torch.Tensor,
         returns: torch.Tensor,
+        rewards: torch.Tensor | None = None,
+        next_obs: torch.Tensor | None = None,
         training_epoch: int | None = None,
     ) -> dict:
         """
@@ -144,9 +212,39 @@ class PPO:
             self.representation_loss_coef_warmup_epochs,
             training_epoch,
         )
+        effective_kappa_coef = effective_intervention_loss_coef(
+            self.kappa_directional_loss_coef,
+            self.kappa_directional_loss_coef_warmup_epochs,
+            training_epoch,
+        )
+        effective_distill_coef = effective_intervention_loss_coef(
+            self.z_distill_loss_coef,
+            self.z_distill_loss_coef_warmup_epochs,
+            training_epoch,
+        )
+        effective_mico_coef = effective_intervention_loss_coef(
+            self.mico_loss_coef,
+            self.mico_loss_coef_warmup_epochs,
+            training_epoch,
+        )
+        effective_dbc_coef = effective_intervention_loss_coef(
+            self.dbc_loss_coef,
+            self.dbc_loss_coef_warmup_epochs,
+            training_epoch,
+        )
+
+        use_bisim = effective_mico_coef > 0 or effective_dbc_coef > 0
+        if use_bisim:
+            if rewards is None or next_obs is None:
+                raise ValueError("MICo/DBC loss requires rewards and next_obs in update()")
 
         # Create dataset
-        dataset = TensorDataset(obs, actions, old_log_probs, advantages, returns)
+        if use_bisim:
+            dataset = TensorDataset(
+                obs, actions, old_log_probs, advantages, returns, rewards, next_obs
+            )
+        else:
+            dataset = TensorDataset(obs, actions, old_log_probs, advantages, returns)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
         
         total_policy_loss = 0
@@ -169,7 +267,22 @@ class PPO:
         }
         
         for epoch in range(self.num_epochs):
-            for batch_obs, batch_actions, batch_old_log_probs, batch_advantages, batch_returns in dataloader:
+            for batch in dataloader:
+                if use_bisim:
+                    (
+                        batch_obs,
+                        batch_actions,
+                        batch_old_log_probs,
+                        batch_advantages,
+                        batch_returns,
+                        batch_rewards,
+                        batch_next_obs,
+                    ) = batch
+                    batch_rewards = batch_rewards.to(self.device)
+                    batch_next_obs = batch_next_obs.to(self.device)
+                else:
+                    batch_obs, batch_actions, batch_old_log_probs, batch_advantages, batch_returns = batch
+
                 batch_obs = batch_obs.to(self.device)
                 batch_actions = batch_actions.to(self.device)
                 batch_old_log_probs = batch_old_log_probs.to(self.device)
@@ -286,14 +399,88 @@ class PPO:
                             raw_loss_components['representation_grad_norm_sq'].append(grad_norm_powered)  # Keep name for compatibility
                             raw_loss_components['representation_mu'].append(mu_est)
                             raw_loss_components['representation_loss_raw'].append(raw_repr_loss)
-                
+
+                kappa_loss = torch.tensor(0.0, device=self.device)
+                distill_loss = torch.tensor(0.0, device=self.device)
+                intervention_stats = {}
+                use_z_ref = (
+                    self.z_ref_expert is not None
+                    and (effective_kappa_coef > 0 or effective_distill_coef > 0)
+                )
+                if use_z_ref:
+                    z_ref = encode_z_ref_batch(self.z_ref_expert, batch_obs)
+                    if effective_kappa_coef > 0:
+                        kappa_loss, kappa_stats = compute_kappa_directional_loss(
+                            self.critic,
+                            z,
+                            z_ref,
+                            effective_kappa_coef,
+                            epsilon=self.kappa_directional_epsilon,
+                            min_distance=self.kappa_directional_min_distance,
+                        )
+                        intervention_stats.update(kappa_stats)
+                    if effective_distill_coef > 0:
+                        distill_loss, distill_stats = compute_z_distill_loss(
+                            z, z_ref, effective_distill_coef
+                        )
+                        intervention_stats.update(distill_stats)
+
+                bisim_loss = torch.tensor(0.0, device=self.device)
+                if effective_mico_coef > 0:
+                    mico_raw, mico_stats = compute_mico_loss(
+                        self.critic,
+                        self.encoder_target,
+                        batch_obs,
+                        batch_next_obs,
+                        batch_rewards,
+                        effective_mico_coef,
+                        self.gamma,
+                        beta=self.mico_beta,
+                        huber_delta=self.mico_huber_delta,
+                        embed_ball_radius=self.mico_embed_ball_radius,
+                        repr_net=self.repr_net,
+                    )
+                    bisim_loss = mico_raw
+                    intervention_stats.update(mico_stats)
+                elif effective_dbc_coef > 0:
+                    dbc_gamma = self.dbc_gamma if self.dbc_gamma is not None else self.gamma
+                    dbc_raw, dbc_stats = compute_dbc_loss(
+                        self.critic,
+                        self.latent_dynamics,
+                        self.latent_dynamics_target,
+                        batch_obs,
+                        batch_next_obs,
+                        batch_actions,
+                        batch_rewards,
+                        effective_dbc_coef,
+                        dbc_gamma,
+                        huber_delta=self.dbc_huber_delta,
+                        embed_ball_radius=self.dbc_embed_ball_radius,
+                        repr_net=self.repr_net,
+                    )
+                    bisim_loss = dbc_raw
+                    intervention_stats.update(dbc_stats)
+
                 # Zero gradients
                 self.unified_optimizer.zero_grad()
                 
                 # Total critic loss: value loss + VAE loss + representation loss
-                # VAE loss ensures encoder learns good representations
-                # Representation loss shrinks representation error via V-gradients
-                critic_loss = value_loss + self.vae_coef * vae_loss + representation_loss
+                bisim_coef = effective_mico_coef if effective_mico_coef > 0 else effective_dbc_coef
+                if bisim_coef > 0:
+                    value_term = (1.0 - bisim_coef) * value_loss
+                    bisim_term = bisim_coef * bisim_loss
+                else:
+                    value_term = value_loss
+                    bisim_term = torch.tensor(0.0, device=self.device)
+
+                critic_loss = (
+                    value_term
+                    + bisim_term
+                    + self.vae_coef * vae_loss
+                    + representation_loss
+                    + kappa_loss
+                    + distill_loss
+                )
                 
                 # Backward pass: gradients flow to policy, critic, and repr_net
                 # Policy loss flows back through z to encoder (for VAE) or repr_net (for ICNN)
@@ -309,6 +496,8 @@ class PPO:
                 all_params = list(self.policy.parameters()) + list(self.critic.parameters())
                 if self.repr_net is not None:
                     all_params = list(self.repr_net.parameters()) + all_params
+                if self.latent_dynamics is not None:
+                    all_params = list(self.latent_dynamics.parameters()) + all_params
                 torch.nn.utils.clip_grad_norm_(all_params, self.max_grad_norm)
                 
                 # Track encoder gradient norms before clipping (for verification)
@@ -321,6 +510,15 @@ class PPO:
                 
                 # Update all networks with unified optimizer
                 self.unified_optimizer.step()
+
+                if self.encoder_target is not None:
+                    self.encoder_target.soft_update_from(self.critic, self.mico_target_update_tau)
+                if self.latent_dynamics_target is not None:
+                    soft_update_module(
+                        self.latent_dynamics_target,
+                        self.latent_dynamics,
+                        self.dbc_target_update_tau,
+                    )
                 
                 # Statistics
                 total_policy_loss += policy_loss.item()
@@ -328,6 +526,11 @@ class PPO:
                 total_entropy += entropy.mean().item()
                 
                 # Track representation loss stats
+                if intervention_stats:
+                    if not hasattr(self, "_intervention_stats"):
+                        self._intervention_stats = []
+                    self._intervention_stats.append(intervention_stats)
+
                 if effective_repr_coef > 0 and representation_loss_stats:
                     if not hasattr(self, '_repr_loss_stats'):
                         self._repr_loss_stats = {
@@ -371,7 +574,22 @@ class PPO:
         }
         if self.representation_loss_coef > 0:
             stats["representation_loss_coef_effective"] = effective_repr_coef
-        
+        if self.kappa_directional_loss_coef > 0:
+            stats["kappa_directional_loss_coef_effective"] = effective_kappa_coef
+        if self.z_distill_loss_coef > 0:
+            stats["z_distill_loss_coef_effective"] = effective_distill_coef
+        if self.mico_loss_coef > 0:
+            stats["mico_loss_coef_effective"] = effective_mico_coef
+        if self.dbc_loss_coef > 0:
+            stats["dbc_loss_coef_effective"] = effective_dbc_coef
+
+        if hasattr(self, "_intervention_stats") and self._intervention_stats:
+            keys = self._intervention_stats[0].keys()
+            for key in keys:
+                vals = [s[key] for s in self._intervention_stats if key in s]
+                stats[key] = sum(vals) / len(vals)
+            delattr(self, "_intervention_stats")
+
         # Add representation loss stats if available
         if hasattr(self, '_repr_loss_stats') and len(self._repr_loss_stats['representation_loss']) > 0:
             stats["representation_loss"] = sum(self._repr_loss_stats['representation_loss']) / len(self._repr_loss_stats['representation_loss'])
@@ -412,6 +630,12 @@ class PPO:
         }
         if self.repr_net is not None:
             save_dict["repr_net"] = self.repr_net.state_dict()
+        if self.latent_dynamics is not None:
+            save_dict["latent_dynamics"] = self.latent_dynamics.state_dict()
+        if self.encoder_target is not None:
+            save_dict["encoder_target"] = self.encoder_target.state_dict()
+        if self.latent_dynamics_target is not None:
+            save_dict["latent_dynamics_target"] = self.latent_dynamics_target.state_dict()
         torch.save(save_dict, path)
     
     def load(self, path: str):
@@ -422,4 +646,10 @@ class PPO:
         self.unified_optimizer.load_state_dict(checkpoint["unified_optimizer"])
         if self.repr_net is not None and "repr_net" in checkpoint:
             self.repr_net.load_state_dict(checkpoint["repr_net"])
+        if self.latent_dynamics is not None and "latent_dynamics" in checkpoint:
+            self.latent_dynamics.load_state_dict(checkpoint["latent_dynamics"])
+        if self.encoder_target is not None and "encoder_target" in checkpoint:
+            self.encoder_target.load_state_dict(checkpoint["encoder_target"])
+        if self.latent_dynamics_target is not None and "latent_dynamics_target" in checkpoint:
+            self.latent_dynamics_target.load_state_dict(checkpoint["latent_dynamics_target"])
 

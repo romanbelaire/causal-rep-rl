@@ -29,6 +29,7 @@ class CSVLogger:
         
         # Main metrics log
         self.metrics_file = self.log_dir / f"{experiment_name}_metrics.csv"
+        self.intervention_loss_file = self.log_dir / f"{experiment_name}_intervention_loss.csv"
         
         # Clear existing CSV file if it exists (to start fresh for new experiment)
         if clear_existing and self.metrics_file.exists():
@@ -39,9 +40,15 @@ class CSVLogger:
                 print(f"Warning: Could not delete existing CSV file {self.metrics_file}: {e}")
                 print("  Continuing anyway - new data will overwrite existing file")
         
+        if clear_existing and self.intervention_loss_file.exists():
+            self.intervention_loss_file.unlink()
+
         self.metrics_writer = None
         self.metrics_fieldnames = None
         self.metrics_file_handle = None
+        self.intervention_writer = None
+        self.intervention_fieldnames = None
+        self.intervention_file_handle = None
     
     def log_metrics(self, step: int, metrics: Dict[str, float]):
         """
@@ -175,8 +182,62 @@ class CSVLogger:
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
     
+    def log_intervention_loss(self, step: int, metrics: Dict[str, float]):
+        """Log v3 κ / Z* distillation training losses (sparse columns per config)."""
+        if not metrics:
+            return
+        if not isinstance(step, (int, float)):
+            raise ValueError(f"step must be a number, got {type(step)}: {step}")
+        step = int(step)
+        if step < 0:
+            raise ValueError(f"step must be >= 0, got {step}")
+
+        if self.intervention_file_handle is None:
+            self.intervention_fieldnames = ["step"] + sorted(metrics.keys())
+            self.intervention_file_handle = open(
+                self.intervention_loss_file, "w", newline="", encoding="utf-8"
+            )
+            self.intervention_writer = csv.DictWriter(
+                self.intervention_file_handle, fieldnames=self.intervention_fieldnames
+            )
+            self.intervention_writer.writeheader()
+        else:
+            new_fields = set(metrics.keys()) - set(self.intervention_fieldnames)
+            if new_fields:
+                self.intervention_fieldnames = ["step"] + sorted(
+                    set(self.intervention_fieldnames[1:]) | new_fields
+                )
+                self.intervention_file_handle.close()
+                existing_rows = []
+                with open(self.intervention_loss_file, "r", newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    if reader.fieldnames:
+                        existing_rows = list(reader)
+                self.intervention_file_handle = open(
+                    self.intervention_loss_file, "w", newline="", encoding="utf-8"
+                )
+                self.intervention_writer = csv.DictWriter(
+                    self.intervention_file_handle, fieldnames=self.intervention_fieldnames
+                )
+                self.intervention_writer.writeheader()
+                for row in existing_rows:
+                    filtered = {k: row.get(k, "") for k in self.intervention_fieldnames}
+                    self.intervention_writer.writerow(filtered)
+
+        sanitized = {}
+        for k, v in metrics.items():
+            if isinstance(v, (int, float)) and math.isfinite(v):
+                sanitized[k] = v
+            else:
+                sanitized[k] = ""
+        row = {"step": step, **sanitized}
+        self.intervention_writer.writerow(row)
+        self.intervention_file_handle.flush()
+
     def close(self):
         """Close log files."""
         if self.metrics_file_handle is not None:
             self.metrics_file_handle.close()
+        if self.intervention_file_handle is not None:
+            self.intervention_file_handle.close()
 
