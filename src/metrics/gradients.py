@@ -139,14 +139,27 @@ def _critic_value_on_z(critic: nn.Module, z: torch.Tensor) -> torch.Tensor:
     return critic(z).sum()
 
 
+def compute_value_jacobian_z(critic: nn.Module, z: torch.Tensor) -> torch.Tensor:
+    """
+    Per-sample value-head Jacobian rows J_phi = dV/dZ, shape [N, d].
+
+    For scalar V(z), row i is grad V(z_i) w.r.t. z_i.
+    """
+    rows = []
+    for i in range(z.shape[0]):
+        zi = z[i : i + 1].detach().requires_grad_(True)
+        vi = _critic_value_on_z(critic, zi)
+        gi = torch.autograd.grad(vi, zi, retain_graph=False)[0]
+        rows.append(gi.squeeze(0))
+    return torch.stack(rows, dim=0)
+
+
 def compute_value_gradient_z_magnitude(critic: nn.Module, z: torch.Tensor) -> float:
     """
     Compute mean ||∇_Z V(Z)|| over a batch of latent representations.
 
     This is the quantity in Theorem reprbound and the bounding chain (Theorem 4).
     """
-    z_grad = z.clone().detach().requires_grad_(True)
-    values = _critic_value_on_z(critic, z_grad)
-    grad_v = torch.autograd.grad(values, z_grad, create_graph=False)[0]
+    grad_v = compute_value_jacobian_z(critic, z)
     return torch.norm(grad_v, dim=1).mean().item()
 

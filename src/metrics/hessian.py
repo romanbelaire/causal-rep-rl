@@ -93,7 +93,7 @@ def compute_hessian_spectrum_quadratic_psd_latent(
 
     Logs μ_latent_analytic = 2 σ_min(A)² and verifies agreement with autodiff.
     """
-    from src.metrics.value_head_mu import get_analytic_mu_latent
+    from src.metrics.value_head_types import is_quadratic_latent_value_head
 
     with torch.no_grad():
         mu_enc, _ = critic.encode(obs_raw)
@@ -106,7 +106,9 @@ def compute_hessian_spectrum_quadratic_psd_latent(
     H_sym = (H + H.T) * 0.5
     eigenvals = torch.linalg.eigvalsh(H_sym)
     mu_latent_autodiff = eigenvals[0].item()
-    mu_latent_analytic = get_analytic_mu_latent(critic).item()
+    if not is_quadratic_latent_value_head(critic):
+        raise ValueError("compute_hessian_spectrum_quadratic_psd_latent requires quadratic latent head")
+    mu_latent_analytic = critic.value_head.analytic_mu_latent().item()
 
     print(
         "Hessian (∇²_Z V): quadratic PSD on latent Z → "

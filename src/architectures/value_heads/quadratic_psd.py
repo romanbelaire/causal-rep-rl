@@ -10,6 +10,8 @@ QuadraticBottleneckValueHead (legacy): MLP then quadratic on bottleneck — μ w
 import torch
 import torch.nn as nn
 
+from src.architectures.activation import activation_module
+
 
 class _QuadraticPSDCore(nn.Module):
     """Shared A, b, c and analytic μ for V(z) = z^T A^T A z + b^T z + c."""
@@ -65,7 +67,7 @@ class QuadraticLatentPSDValueHead(_QuadraticPSDCore):
 
 
 class QuadraticBottleneckValueHead(nn.Module):
-    """Legacy: linear → ReLU → linear → quadratic on bottleneck (μ w.r.t. Z requires chain rule)."""
+    """Legacy: linear → activation → linear → quadratic on bottleneck."""
 
     def __init__(
         self,
@@ -73,6 +75,7 @@ class QuadraticBottleneckValueHead(nn.Module):
         hidden_dim: int,
         bottleneck_dim: int,
         mu_min_floor: float = 0.0,
+        activation: str = "gelu",
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -80,7 +83,7 @@ class QuadraticBottleneckValueHead(nn.Module):
         self.mu_min_floor = mu_min_floor
 
         self.fc1 = nn.Linear(latent_dim, hidden_dim)
-        self.act = nn.ReLU()
+        self.act = activation_module(activation)
         self.fc2 = nn.Linear(hidden_dim, bottleneck_dim)
 
         self._quad = _QuadraticPSDCore(bottleneck_dim, mu_min_floor)

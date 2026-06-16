@@ -4,6 +4,10 @@ torch>=2.0.0
 # Reinforcement Learning Environments
 gymnasium
 gym-minigrid
+procgen>=0.10.7
+dm_control==1.0.38
+mujoco==3.6.0
+shimmy>=1.0.0
 
 # Scientific Computing
 numpy

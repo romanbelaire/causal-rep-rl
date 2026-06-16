@@ -28,8 +28,12 @@ class CSVLogger:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
         # Main metrics log
-        self.metrics_file = self.log_dir / f"{experiment_name}_metrics.csv"
-        self.intervention_loss_file = self.log_dir / f"{experiment_name}_intervention_loss.csv"
+        if experiment_name:
+            self.metrics_file = self.log_dir / f"{experiment_name}_metrics.csv"
+            self.intervention_loss_file = self.log_dir / f"{experiment_name}_intervention_loss.csv"
+        else:
+            self.metrics_file = self.log_dir / "metrics.csv"
+            self.intervention_loss_file = self.log_dir / "intervention_loss.csv"
         
         # Clear existing CSV file if it exists (to start fresh for new experiment)
         if clear_existing and self.metrics_file.exists():
@@ -178,7 +182,10 @@ class CSVLogger:
     
     def save_config(self, config: Dict[str, Any]):
         """Save experiment configuration."""
-        config_file = self.log_dir / f"{self.experiment_name}_config.json"
+        if self.experiment_name:
+            config_file = self.log_dir / f"{self.experiment_name}_config.json"
+        else:
+            config_file = self.log_dir / "config.json"
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
     

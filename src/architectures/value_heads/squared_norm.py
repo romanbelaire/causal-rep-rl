@@ -7,17 +7,25 @@ At f ≈ 0, ∇²V ≈ 2 J_f^T J_f. μ is tracked via λ_min(2 J_f^T J_f) per st
 import torch
 import torch.nn as nn
 
+from src.architectures.activation import activation_module
+
 
 class SquaredNormValueHead(nn.Module):
-    """linear → ReLU → linear → ||f||²."""
+    """linear → activation → linear → ||f||²."""
 
-    def __init__(self, latent_dim: int, hidden_dim: int, feature_dim: int):
+    def __init__(
+        self,
+        latent_dim: int,
+        hidden_dim: int,
+        feature_dim: int,
+        activation: str = "gelu",
+    ):
         super().__init__()
         self.latent_dim = latent_dim
         self.feature_dim = feature_dim
 
         self.fc1 = nn.Linear(latent_dim, hidden_dim)
-        self.act = nn.ReLU()
+        self.act = activation_module(activation)
         self.fc2 = nn.Linear(hidden_dim, feature_dim)
 
         nn.init.orthogonal_(self.fc1.weight, gain=1.0)
