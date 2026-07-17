@@ -98,6 +98,72 @@ Legacy `quadratic_bottleneck*` configs are deprecated (μ was w.r.t. an internal
 
 ---
 
+## Performance suite: DMControl CTRO vs PPO (MLP, policy-on-Z)
+
+State-based continuous control comparison on `dmcontrol_state` (cartpole-swingup, cheetah-run, hopper-hop, walker-walk). Config lives in [`src/experiments/config.py`](src/experiments/config.py) (`DMCONTROL_*`); stacks are built in [`src/experiments/performance_models.py`](src/experiments/performance_models.py).
+
+### Motivation
+
+CTRO is PPO plus causal-representation losses on a shared latent \(Z\):
+
+\[
+L_{\mathrm{CTRO}} = L_{\mathrm{PPO}} + \alpha\, L_{\mathrm{MICo}} + \beta\, L_{\mathrm{PL}}
+\]
+
+Minigrid ablations used a **VAE** encoder/decoder with policy-on-\(Z\). Porting that stack unchanged to DMControl **hurt** vs the PPO baseline: DMControl observations are already compact Markov physics states (obs dim ~5–24). A VAE bottleneck + recon/KL is an unnecessary generative prior there, and early training showed policy-ratio / representation collapse (especially cheetah).
+
+What CTRO actually needs is not a VAE, but:
+
+1. A map \(s \mapsto Z(s)\) shared by \(\pi(a|Z)\) and \(V(Z)\)
+2. **MICo** (bisimulation geometry on \(Z\)) and **PL** (value-gradient / Bellman-gap coupling)
+
+Reconstruction/KL are optional VAE regularizers, not part of the CTRO objective.
+
+### Method: MLP CTRO (`exp_ctro_mlp`)
+
+| Piece | Choice |
+|-------|--------|
+| Critic | `MLPEncoderCritic`: `obs → encoder MLP → Z → linear value_head → V` ([`mlp_encoder_critic.py`](src/architectures/critics/mlp_encoder_critic.py)) |
+| Policy | `MLPPolicy` on **\(Z\)** (`policy_on_latent=True`) |
+| \(Z\) dim | Last `encoder_hidden` size (`[256, 256]` → 256) |
+| Policy torso | `[64, 64]`, `tanh` (same widths as PPO policy, input dim = latent) |
+| VAE / recon | None (`vae_coef=0`, no decoder) |
+| Losses | MICo (`α=0.01`) + PL (`β=0.1`); `entropy_coef=0` to match PPO |
+| Stack type | `ctro_mlp` |
+| Checkpoints | `results/dmcontrol_state/exp_ctro_mlp/seed_{N}/{task}/` |
+
+Policy-on-\(Z\) is intentional: CTRO’s claim is that the policy acts in the causally structured representation, not only that the critic is regularized.
+
+### Method: PPO baseline (`exp_baseline`)
+
+| Piece | Choice |
+|-------|--------|
+| Critic | `FeedforwardCritic` on raw obs |
+| Policy | `MLPPolicy` on raw obs (`policy_on_latent=False`) |
+| Extra losses | None (`α=β=vae_coef=0`, `entropy_coef=0`) |
+| Stack type | `ppo_mlp` |
+| Checkpoints | `results/dmcontrol_state/exp_baseline/seed_{N}/{task}/` |
+
+Comparison is **methodological** (shared \(Z\) + MICo/PL vs end-to-end MLP on state), not architecture-identical.
+
+### What stayed on VAE
+
+- **Minigrid** CTRO ablations: VAE + latent IMPALA (controlled loss ablations).
+- **Procgen** CTRO: still CNN-VAE + latent policy (`PROCGEN_CTRO_ALGO_CONFIG` keeps `vae_coef=0.1`). Pixel domains still motivate a reconstructible latent; DMControl state does not.
+
+### Launch
+
+```bash
+sbatch src/experiments/jobs/perf_train_dmcontrol_s.sh           # CTRO MLP → exp_ctro_mlp
+sbatch src/experiments/jobs/perf_train_dmcontrol_baseline_s.sh # PPO → exp_baseline
+sbatch src/experiments/jobs/perf_eval_dmcontrol_s.sh            # eval CTRO (default EXP_NAME=exp_ctro_mlp)
+sbatch src/experiments/jobs/perf_eval_dmcontrol_baseline_s.sh
+```
+
+Legacy VAE DMControl runs (if any) used `exp_full` / `stack_type=ctro_mlp_vae`; eval still reloads that stack from checkpoint config for backward compatibility.
+
+---
+
 ## Running Experiments
 
 ### Submit all experiments:
@@ -139,6 +205,8 @@ tail -f *.out  # View output files
 | 2.2 | IMPALA | VAE | TRPO | Causal representation |
 | 3 | IMPALA | ICNN | TRPO | Convexity enforcement |
 | 4 | IMPALA | VAE | PPO (strict) | Strict clipping |
+| DMControl PPO | MLP on obs | Feedforward MLP | PPO | Continuous-control baseline |
+| DMControl CTRO | MLP on \(Z\) | MLP encoder + value head | PPO + MICo + PL | Shared causal \(Z\), no VAE |
 
 ---
 
