@@ -42,8 +42,6 @@ logs/
 *.log
 *.out
 *.err
-outputs/
-results/
 checkpoints/
 wandb/
 tensorboard/

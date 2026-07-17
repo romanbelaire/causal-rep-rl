@@ -5,6 +5,8 @@ Gradient magnitude and difference metrics.
 import torch
 import torch.nn as nn
 
+from src.utils.batched_grad import batched_value_head_grad_z
+
 
 def compute_gradient_magnitude(
     model: nn.Module,
@@ -145,13 +147,7 @@ def compute_value_jacobian_z(critic: nn.Module, z: torch.Tensor) -> torch.Tensor
 
     For scalar V(z), row i is grad V(z_i) w.r.t. z_i.
     """
-    rows = []
-    for i in range(z.shape[0]):
-        zi = z[i : i + 1].detach().requires_grad_(True)
-        vi = _critic_value_on_z(critic, zi)
-        gi = torch.autograd.grad(vi, zi, retain_graph=False)[0]
-        rows.append(gi.squeeze(0))
-    return torch.stack(rows, dim=0)
+    return batched_value_head_grad_z(critic, z.detach().requires_grad_(True))
 
 
 def compute_value_gradient_z_magnitude(critic: nn.Module, z: torch.Tensor) -> float:

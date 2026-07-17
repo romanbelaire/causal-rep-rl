@@ -18,27 +18,10 @@ from src.evaluation.suites import (
     EVAL_SUITES,
     parse_dmcontrol_task,
 )
-from src.architectures.policies.impala import IMPALAPolicy
-from src.experiments.runner import create_critic
+from src.experiments.performance_models import PerformanceStack, build_performance_stack_from_config
+from src.utils.bisimulation_utils import encode_phi
 from src.utils.logging import CSVLogger
-
-
-def create_eval_policy(
-    repr_dim: int,
-    action_dim: int,
-    arch: dict,
-    device: str,
-    action_space_type: str,
-) -> IMPALAPolicy:
-    p = arch["policy"]
-    return IMPALAPolicy(
-        repr_dim,
-        action_dim,
-        p["hidden_sizes"],
-        p["activation"],
-        action_space_type,
-        p["num_residual_blocks"],
-    ).to(device)
+from src.utils.normalization import PerformanceNormalizer
 
 
 def make_env(suite: EvalSuite, task: str, distribution: DistributionSpec):
@@ -50,7 +33,7 @@ def make_env(suite: EvalSuite, task: str, distribution: DistributionSpec):
             distribution_mode=suite.distribution_mode,
             num_levels=distribution.procgen_num_levels,
             start_level=distribution.procgen_start_level,
-            keep_image_format=False,
+            keep_image_format=True,
         )
     if suite.env_type == "dmcontrol":
         from src.environments.dmcontrol_wrapper import DMControlWrapper
@@ -66,29 +49,39 @@ def make_env(suite: EvalSuite, task: str, distribution: DistributionSpec):
 
 def run_eval_episodes(
     env,
-    policy: nn.Module,
-    critic: nn.Module,
+    stack: PerformanceStack,
+    normalizer: PerformanceNormalizer,
     device: str,
     n_episodes: int,
     deterministic: bool = True,
     dmcontrol_seed_offset: int = 0,
+    mico_embed_ball_radius: float | None = None,
 ) -> dict[str, float]:
     returns = []
-    policy.eval()
+    stack.policy.eval()
 
     for episode_idx in range(n_episodes):
         reset_seed = None
         if env.action_space_type == "continuous":
             reset_seed = dmcontrol_seed_offset + episode_idx
         obs, _ = env.reset(seed=reset_seed)
+        normalizer.reward_norm.reset_episode()
         total = 0.0
         done = False
 
         while not done:
             obs_tensor = obs.unsqueeze(0).to(device)
+            norm_obs = normalizer.observe(obs_tensor)
             with torch.no_grad():
-                mu, _ = critic.encode(obs_tensor)
-                action, _ = policy.get_action(mu, deterministic=deterministic)
+                if stack.policy_on_latent:
+                    phi = encode_phi(
+                        stack.critic,
+                        norm_obs,
+                        embed_ball_radius=mico_embed_ball_radius,
+                    )
+                    action, _ = stack.policy.get_action(phi.squeeze(0), deterministic=deterministic)
+                else:
+                    action, _ = stack.policy.get_action(norm_obs, deterministic=deterministic)
             step_action = action.item() if env.action_space_type == "discrete" else action
             obs, reward, terminated, truncated, _ = env.step(step_action)
             total += float(reward)
@@ -96,7 +89,7 @@ def run_eval_episodes(
 
         returns.append(total)
 
-    policy.train()
+    stack.policy.train()
     return {
         "return_mean": float(np.mean(returns)),
         "return_std": float(np.std(returns)),
@@ -113,33 +106,38 @@ def resolve_task_path(base: Path, task: str, filename: str) -> Path:
     return task_path
 
 
-def load_models_from_checkpoint(
+def load_stack_from_checkpoint(
     checkpoint_path: str | Path,
     config_path: str | Path,
     obs_dim: int,
     action_dim: int,
     action_space_type: str,
+    obs_shape: tuple[int, ...] | None,
     device: str,
     task: str,
-) -> tuple[nn.Module, nn.Module]:
+) -> tuple[PerformanceStack, PerformanceNormalizer]:
     ckpt_file = resolve_task_path(Path(checkpoint_path), task, "weights_final.pt")
     cfg_file = resolve_task_path(Path(config_path), task, "config.json")
 
     with open(cfg_file) as f:
         config = json.load(f)
 
-    arch_cfg = config["architecture"]
-    latent_dim = arch_cfg["critic"]["latent_dim"]
-
-    critic = create_critic(obs_dim, arch_cfg, device)
-    policy = create_eval_policy(latent_dim, action_dim, arch_cfg, device, action_space_type)
+    stack = build_performance_stack_from_config(
+        config,
+        obs_dim,
+        action_dim,
+        action_space_type,
+        tuple(config["obs_shape"]) if config["obs_shape"] is not None else obs_shape,
+        device,
+    )
+    normalizer = PerformanceNormalizer.from_state_dict(config["normalization"])
 
     checkpoint = torch.load(ckpt_file, map_location=device, weights_only=True)
-    critic.load_state_dict(checkpoint["critic"])
-    policy.load_state_dict(checkpoint["policy"])
-    critic.eval()
-    policy.eval()
-    return policy, critic
+    stack.policy.load_state_dict(checkpoint["policy"])
+    stack.critic.load_state_dict(checkpoint["critic"])
+    stack.policy.eval()
+    stack.critic.eval()
+    return stack, normalizer, config
 
 
 def _metric_key(task: str, distribution: str, stat: str) -> str:
@@ -162,15 +160,17 @@ def run_eval_suite(
     metrics: dict[str, float] = {}
     for task in task_list:
         probe_env = make_env(suite, task, suite.distributions[0])
-        policy, critic = load_models_from_checkpoint(
+        stack, normalizer, config = load_stack_from_checkpoint(
             checkpoint_path,
             config_path,
             probe_env.obs_dim,
             probe_env.action_dim,
             probe_env.action_space_type,
+            probe_env.obs_shape,
             device,
             task,
         )
+        mico_embed_ball_radius = config["algorithm"].get("mico_embed_ball_radius")
         probe_env.close()
 
         for distribution in suite.distributions:
@@ -178,12 +178,13 @@ def run_eval_suite(
             seed_offset = distribution.dmcontrol_seed_offset or 0
             result = run_eval_episodes(
                 env,
-                policy,
-                critic,
+                stack,
+                normalizer,
                 device,
                 n_episodes,
                 deterministic=det,
                 dmcontrol_seed_offset=seed_offset,
+                mico_embed_ball_radius=mico_embed_ball_radius,
             )
             env.close()
             metrics[_metric_key(task, distribution.name, "return_mean")] = result["return_mean"]

@@ -15,8 +15,8 @@ def main():
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--exp-name", type=str, default="exp_full")
     parser.add_argument("--agent", type=str, default="ctro", choices=["ctro", "ppo"])
-    parser.add_argument("--alpha", type=float, default=0.1)
-    parser.add_argument("--beta", type=float, default=0.5)
+    parser.add_argument("--alpha", type=float, default=None)
+    parser.add_argument("--beta", type=float, default=None)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--results-root", type=str, default="results")
     args = parser.parse_args()
@@ -25,7 +25,14 @@ def main():
         raise ValueError(f"Unknown task {args.task} for suite {args.suite}")
 
     agent_cls = CTRO if args.agent == "ctro" else PPO
-    algo_overrides = {"alpha": args.alpha, "beta": args.beta} if args.agent == "ctro" else {}
+    if args.agent == "ctro":
+        algo_overrides = {}
+        if args.alpha is not None:
+            algo_overrides["alpha"] = args.alpha
+        if args.beta is not None:
+            algo_overrides["beta"] = args.beta
+    else:
+        algo_overrides = {"alpha": 0.0, "beta": 0.0, "vae_coef": 0.0}
 
     run_performance_train(
         suite_name=args.suite,

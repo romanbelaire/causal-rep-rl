@@ -3,6 +3,8 @@
 import torch
 import torch.nn as nn
 
+from src.utils.batched_grad import batched_value_head_grad_z
+
 
 def _value_head_output(critic: nn.Module, z: torch.Tensor) -> torch.Tensor:
     return critic.value_head(z).squeeze(-1)
@@ -10,18 +12,7 @@ def _value_head_output(critic: nn.Module, z: torch.Tensor) -> torch.Tensor:
 
 def _grad_v_wrt_z(critic: nn.Module, z: torch.Tensor) -> torch.Tensor:
     """Per-sample dV/dZ rows [N, d]; Z retains connection to encoder."""
-    rows = []
-    for i in range(z.shape[0]):
-        zi = z[i : i + 1]
-        vi = _value_head_output(critic, zi)
-        gi = torch.autograd.grad(
-            vi.sum(),
-            zi,
-            retain_graph=True,
-            create_graph=True,
-        )[0]
-        rows.append(gi.squeeze(0))
-    return torch.stack(rows, dim=0)
+    return batched_value_head_grad_z(critic, z)
 
 
 def compute_pl_coupling_loss(

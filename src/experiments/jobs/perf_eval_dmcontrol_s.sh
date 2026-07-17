@@ -8,7 +8,6 @@
 #SBATCH --constraint=l40|l40s|a100|a40
 #SBATCH --mail-type=END
 #SBATCH --output=%u.perf_eval_dmcontrol_s_.%j.out
-#SBATCH --error=%u.perf_eval_dmcontrol_s_.%j.err
 #SBATCH --requeue
 #SBATCH --partition=researchshort
 #SBATCH --account=pradeepresearch
@@ -25,7 +24,8 @@
 # Example tasks: cheetah-run, walker-walk, hopper-hop, cartpole-swingup
 #
 # Override at submit time, e.g.:
-#   EXP_NAME=exp_full SEEDS="42 43 44" sbatch perf_eval_dmcontrol_s.sh
+#   EXP_NAME=exp_ctro_mlp SEEDS="42 43 44" sbatch perf_eval_dmcontrol_s.sh
+# Skips seeds with performance_eval_metrics.csv.
 
 module purge
 module load Python/3.10.16-GCCcore-13.3.0
@@ -43,7 +43,7 @@ export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/apps/software/Python/3.10.16-GCCcor
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
 export MUJOCO_GL=egl
 
-EXP_NAME="${EXP_NAME:-exp_full}"
+EXP_NAME="${EXP_NAME:-exp_ctro_mlp}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-results/dmcontrol_state/${EXP_NAME}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-results/perf_eval/dmcontrol_state/${EXP_NAME}}"
 SEEDS="${SEEDS:-42 43 44}"
@@ -64,6 +64,11 @@ nvidia-smi
 for SEED in ${SEEDS}; do
   CKPT_DIR="${CHECKPOINT_ROOT}/seed_${SEED}"
   OUT_DIR="${OUTPUT_ROOT}/seed_${SEED}"
+  METRICS="${OUT_DIR}/performance_eval_metrics.csv"
+  if [ -f "${METRICS}" ]; then
+    echo "Skipping seed ${SEED} — already finished: ${METRICS}"
+    continue
+  fi
   mkdir -p "${OUT_DIR}"
 
   srun --gres=gpu:1 python -m src.experiments.run_performance_eval \

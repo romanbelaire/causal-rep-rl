@@ -34,6 +34,7 @@ class PPO:
         self.max_grad_norm = config.get("max_grad_norm", 0.5)
         self.batch_size = config.get("batch_size", 64)
         self.num_epochs = config.get("num_epochs", 4)
+        self.policy_on_latent = config.get("policy_on_latent", True)
 
         all_params = list(self.policy.parameters()) + list(self.critic.parameters())
         if self.repr_net is not None:
@@ -77,9 +78,6 @@ class PPO:
         if hasattr(self.critic, "encode"):
             mu, _ = self.critic.encode(batch_obs)
             return mu
-        if batch_obs.dim() == 4:
-            n, h, w, c = batch_obs.shape
-            return batch_obs.view(n, h * w * c)
         return batch_obs
 
     def _forward_batch(
@@ -91,10 +89,21 @@ class PPO:
         batch_returns: torch.Tensor,
     ) -> dict:
         z = self._encode_batch(batch_obs)
+        if not torch.isfinite(z).all():
+            raise RuntimeError(
+                f"Non-finite latent z in PPO update (nan={torch.isnan(z).any().item()}, "
+                f"inf={torch.isinf(z).any().item()})"
+            )
+        policy_in = z if self.policy_on_latent else batch_obs
 
-        log_probs, entropy = self.policy.evaluate_actions(z, batch_actions)
+        log_probs, entropy = self.policy.evaluate_actions(policy_in, batch_actions)
+        if not torch.isfinite(log_probs).all():
+            raise RuntimeError("Non-finite policy log_probs in PPO update")
 
-        ratio = torch.exp(log_probs - batch_old_log_probs)
+        # Clamp log-ratio before exp so negative-advantage / huge-ratio cases
+        # cannot produce Inf surrogates (common continuous-PPO NaN path).
+        log_ratio = torch.clamp(log_probs - batch_old_log_probs, min=-20.0, max=2.0)
+        ratio = torch.exp(log_ratio)
         surr1 = ratio * batch_advantages
         surr2 = torch.clamp(ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * batch_advantages
         policy_loss = -torch.min(surr1, surr2).mean()
@@ -104,14 +113,14 @@ class PPO:
         recon_loss = torch.tensor(0.0, device=self.device)
         kl_loss = torch.tensor(0.0, device=self.device)
 
-        if hasattr(self.critic, "encode"):
+        if hasattr(self.critic, "encode") and self.vae_coef > 0:
             values, vae_info = self.critic(batch_obs, return_latent=True)
             values = values.squeeze(-1)
             recon_loss = vae_info["recon_loss"]
             kl_loss = vae_info["kl_loss"]
             vae_loss = vae_info["vae_loss"]
         else:
-            values = self.critic(z).squeeze(-1)
+            values = self.critic(batch_obs).squeeze(-1)
 
         value_loss = nn.functional.mse_loss(values, batch_returns)
 
@@ -224,6 +233,14 @@ class PPO:
                 torch.nn.utils.clip_grad_norm_(all_params, self.max_grad_norm)
                 self.unified_optimizer.step()
                 self._after_optimizer_step()
+
+                with torch.no_grad():
+                    for name, param in [("policy", self.policy), ("critic", self.critic)]:
+                        for p in param.parameters():
+                            if not torch.isfinite(p).all():
+                                raise RuntimeError(
+                                    f"Non-finite {name} weights after optimizer step"
+                                )
 
                 for key, val in extra_stats.items():
                     extra_stats_acc.setdefault(key, []).append(val)

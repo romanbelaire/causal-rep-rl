@@ -62,9 +62,15 @@ class MLPPolicy(nn.Module):
         # Output heads
         if action_space_type == "discrete":
             self.action_head = nn.Linear(input_dim, action_dim)
+            nn.init.orthogonal_(self.action_head.weight, gain=0.01)
+            nn.init.zeros_(self.action_head.bias)
         else:  # continuous
             self.action_mean = nn.Linear(input_dim, action_dim)
             self.action_log_std = nn.Linear(input_dim, action_dim)
+            nn.init.orthogonal_(self.action_mean.weight, gain=0.01)
+            nn.init.zeros_(self.action_mean.bias)
+            nn.init.orthogonal_(self.action_log_std.weight, gain=0.01)
+            nn.init.zeros_(self.action_log_std.bias)
     
     def forward(self, obs: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
@@ -83,10 +89,10 @@ class MLPPolicy(nn.Module):
             logits = self.action_head(features)
             return logits
         else:
-            mean = self.action_mean(features)
+            # Pre-tanh mean clamped so Normal(loc) stays finite under shared-Z training.
+            mean = torch.clamp(self.action_mean(features), min=-10.0, max=10.0)
             log_std = self.action_log_std(features)
-            # Clamp log_std for numerical stability
-            log_std = torch.clamp(log_std, min=-20, max=2)
+            log_std = torch.clamp(log_std, min=-5.0, max=2.0)
             return mean, log_std
     
     def get_action(self, obs: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
@@ -159,6 +165,11 @@ class MLPPolicy(nn.Module):
             entropy = dist.entropy()
         else:  # continuous
             mean, log_std = self.forward(obs)
+            if not torch.isfinite(mean).all():
+                raise RuntimeError(
+                    f"Non-finite continuous policy mean "
+                    f"(nan={torch.isnan(mean).any().item()}, inf={torch.isinf(mean).any().item()})"
+                )
             std = torch.exp(log_std)
             dist = torch.distributions.Normal(mean, std)
             log_probs = dist.log_prob(actions).sum(dim=-1)

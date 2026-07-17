@@ -9,7 +9,6 @@
 #SBATCH --constraint=l40|l40s|a100|a40
 #SBATCH --mail-type=END
 #SBATCH --output=%u.perf_train_dmcontrol_s_%a.%j.out
-#SBATCH --error=%u.perf_train_dmcontrol_s_%a.%j.err
 #SBATCH --requeue
 #SBATCH --partition=researchshort
 #SBATCH --account=pradeepresearch
@@ -18,7 +17,8 @@
 #SBATCH --job-name=ctro-train-dmcontrol
 
 # Train one DMControl task across seeds 42/43/44.
-# Array index selects the task. Checkpoints -> results/dmcontrol_state/exp_full/seed_{N}/{task}/
+# Array index selects the task. Checkpoints -> results/dmcontrol_state/exp_ctro_mlp/seed_{N}/{task}/
+# Skips seeds with weights_final.pt; cancelled mid-run seeds restart from scratch.
 
 module purge
 module load Python/3.10.16-GCCcore-13.3.0
@@ -40,13 +40,19 @@ pip install -q 'dm_control==1.0.38' 'mujoco==3.6.0' shimmy
 
 TASKS=(cheetah-run walker-walk hopper-hop cartpole-swingup)
 TASK="${TASKS[$SLURM_ARRAY_TASK_ID]}"
-EXP_NAME="${EXP_NAME:-exp_full}"
+EXP_NAME="${EXP_NAME:-exp_ctro_mlp}"
 
 mkdir -p results/slurm
 
 nvidia-smi
 
 for SEED in 42 43 44; do
+  CKPT="results/dmcontrol_state/${EXP_NAME}/seed_${SEED}/${TASK}/weights_final.pt"
+  if [ -f "${CKPT}" ]; then
+    echo "Skipping seed ${SEED} — already finished: ${CKPT}"
+    continue
+  fi
+
   srun --gres=gpu:1 python -m src.experiments.run_performance_train \
     --suite dmcontrol_state \
     --task "${TASK}" \

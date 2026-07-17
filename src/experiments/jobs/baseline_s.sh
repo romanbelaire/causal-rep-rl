@@ -8,7 +8,6 @@
 #SBATCH --constraint=l40|l40s|a100|a40
 #SBATCH --mail-type=END
 #SBATCH --output=%u.baseline_s_.%j.out
-#SBATCH --error=%u.baseline_s_.%j.err
 #SBATCH --requeue
 #SBATCH --partition=researchshort
 #SBATCH --account=pradeepresearch

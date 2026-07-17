@@ -7,25 +7,33 @@ import torch.nn as nn
 
 
 class VAEEncoderTarget(nn.Module):
-    """Target copy of VAE encoder (mu only) for stable bisimulation targets."""
+    """
+    Target copy of encoder for stable bisimulation targets.
+
+    VAE critics: soft-update encoder + fc_mu.
+    MLP encoder critics: soft-update encoder only; encode_mu runs encoder(obs).
+    """
 
     def __init__(self, critic: nn.Module):
         super().__init__()
         self.encoder = copy.deepcopy(critic.encoder)
-        self.fc_mu = copy.deepcopy(critic.fc_mu)
+        self.fc_mu = copy.deepcopy(critic.fc_mu) if hasattr(critic, "fc_mu") else None
         for param in self.parameters():
             param.requires_grad = False
 
     def encode_mu(self, obs: torch.Tensor) -> torch.Tensor:
         h = self.encoder(obs)
+        if self.fc_mu is None:
+            return h
         return self.fc_mu(h)
 
     @torch.no_grad()
     def soft_update_from(self, critic: nn.Module, tau: float) -> None:
         for target_param, param in zip(self.encoder.parameters(), critic.encoder.parameters()):
             target_param.data.mul_(1.0 - tau).add_(param.data, alpha=tau)
-        for target_param, param in zip(self.fc_mu.parameters(), critic.fc_mu.parameters()):
-            target_param.data.mul_(1.0 - tau).add_(param.data, alpha=tau)
+        if self.fc_mu is not None:
+            for target_param, param in zip(self.fc_mu.parameters(), critic.fc_mu.parameters()):
+                target_param.data.mul_(1.0 - tau).add_(param.data, alpha=tau)
 
 
 def encode_phi(

@@ -3,6 +3,8 @@
 import torch
 import torch.nn as nn
 
+from src.utils.batched_grad import batched_value_head_grad_z
+
 
 def compute_mu_pl_bootstrap(
     critic: nn.Module,
@@ -11,6 +13,7 @@ def compute_mu_pl_bootstrap(
     next_obs: torch.Tensor,
     gamma: float,
     eps: float = 1e-4,
+    max_samples: int | None = None,
 ) -> dict[str, float]:
     """
     mu_PL = 5th percentile of pl_ratio over batch.
@@ -19,6 +22,13 @@ def compute_mu_pl_bootstrap(
     value_gap = V_target - V(Z(s))
     pl_ratio = ||grad_Z V||^2 / (2 * max(value_gap, eps))
     """
+    n = z.shape[0]
+    if max_samples is not None and max_samples < n:
+        idx = torch.randperm(n, device=z.device)[:max_samples]
+        z = z[idx]
+        rewards = rewards[idx]
+        next_obs = next_obs[idx]
+
     with torch.no_grad():
         mu_next, _ = critic.encode(next_obs)
         z_next = mu_next
@@ -27,13 +37,8 @@ def compute_mu_pl_bootstrap(
         v_target = rewards + gamma * v_next
         value_gap = v_target - v
 
-    rows = []
-    for i in range(z.shape[0]):
-        zi = z[i : i + 1].detach().requires_grad_(True)
-        vi = critic.value_head(zi).squeeze()
-        gi = torch.autograd.grad(vi, zi, retain_graph=False)[0]
-        rows.append(gi.squeeze(0))
-    grad_z = torch.stack(rows, dim=0)
+    z_grad = z.detach().requires_grad_(True)
+    grad_z = batched_value_head_grad_z(critic, z_grad)
     grad_sq = grad_z.pow(2).sum(dim=1)
 
     with torch.no_grad():

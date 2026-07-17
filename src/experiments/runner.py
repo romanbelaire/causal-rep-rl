@@ -17,6 +17,7 @@ from src.architectures.critics.vae_critic import VAECritic
 from src.architectures.policies.impala import IMPALAPolicy
 from src.environments.minigrid_wrapper import MinigridWrapper
 from src.experiments.config import BASE_ALGO_CONFIG, BASE_ARCH_CONFIG, BASE_TRAINING_CONFIG
+from src.utils.best_episode_recorder import BestEpisodeFrameRecorder
 from src.utils.ctro_metric_evaluator import CTROMetricEvaluator
 from src.utils.logging import CSVLogger
 
@@ -62,6 +63,7 @@ def collect_rollout_buffer(
     critic: nn.Module,
     buffer_size: int,
     device: str,
+    frame_recorder: BestEpisodeFrameRecorder | None = None,
 ) -> dict:
     buffer = {
         "obs": [],
@@ -79,6 +81,9 @@ def collect_rollout_buffer(
 
     while len(buffer["obs"]) < buffer_size:
         obs, _ = env.reset()
+        if frame_recorder is not None:
+            frame_recorder.start_episode()
+            frame_recorder.append_frame(obs)
         done = False
 
         while not done and len(buffer["obs"]) < buffer_size:
@@ -106,10 +111,15 @@ def collect_rollout_buffer(
             current_return += reward
             current_length += 1
             obs = next_obs
+            if frame_recorder is not None:
+                frame_recorder.add_reward(reward)
+                frame_recorder.append_frame(obs)
 
             if done:
                 episode_returns.append(current_return)
                 episode_lengths.append(current_length)
+                if frame_recorder is not None:
+                    frame_recorder.finish_episode()
                 current_return = 0.0
                 current_length = 0
 
@@ -184,6 +194,7 @@ def run_experiment(
     run_dir.mkdir(parents=True, exist_ok=True)
 
     env = MinigridWrapper("MiniGrid-Unlock-v0", seed=seed, keep_image_format=False)
+    frame_recorder = BestEpisodeFrameRecorder(env.obs_shape)
     obs_dim = env.obs_dim
     action_dim = env.action_dim
     latent_dim = arch_cfg["critic"]["latent_dim"]
@@ -224,7 +235,9 @@ def run_experiment(
     print(f"Starting {exp_name} seed={seed} agent={agent_cls.__name__} device={device}")
 
     for epoch in range(1, total_epochs + 1):
-        buffer = collect_rollout_buffer(env, policy, critic, buffer_size, device)
+        buffer = collect_rollout_buffer(
+            env, policy, critic, buffer_size, device, frame_recorder=frame_recorder
+        )
         buffer["obs"] = buffer["obs"].to(device)
         buffer["actions"] = buffer["actions"].to(device)
         buffer["rewards"] = buffer["rewards"].to(device)
@@ -318,6 +331,13 @@ def run_experiment(
             print(f"Epoch {epoch}/{total_epochs} steps={total_steps} return={mean_ret:.3f}")
 
     agent.save(str(run_dir / "weights_final.pt"))
+    best_episode_path = run_dir / "best_episode_frames.npz"
+    frame_recorder.save(best_episode_path)
+    if frame_recorder.best_frames is not None:
+        print(
+            f"Saved best episode (return={frame_recorder.best_return:.3f}, "
+            f"length={frame_recorder.best_frames.shape[0]}) -> {best_episode_path}"
+        )
     logger.close()
     print(f"Finished {exp_name} seed={seed} -> {run_dir}")
     return run_dir

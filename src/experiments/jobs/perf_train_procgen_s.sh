@@ -9,7 +9,6 @@
 #SBATCH --constraint=l40|l40s|a100|a40
 #SBATCH --mail-type=END
 #SBATCH --output=%u.perf_train_procgen_s_%a.%j.out
-#SBATCH --error=%u.perf_train_procgen_s_%a.%j.err
 #SBATCH --requeue
 #SBATCH --partition=researchshort
 #SBATCH --account=pradeepresearch
@@ -19,6 +18,7 @@
 
 # Train one Procgen game (25M steps) across seeds 42/43/44.
 # Array index selects the game. Checkpoints -> results/procgen_easy/exp_full/seed_{N}/{game}/
+# Skips seeds with weights_final.pt; cancelled mid-run seeds restart from scratch.
 
 module purge
 module load Python/3.10.16-GCCcore-13.3.0
@@ -34,6 +34,7 @@ export LIBRARY_PATH=$LIBRARY_PATH:~/LLM/llm/lib:/opt/apps/software/Python/3.10.1
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/apps/software/Python/3.10.16-GCCcore-13.3.0/lib
 
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
+export PYTHONUNBUFFERED=1
 
 pip install -q procgen
 
@@ -46,6 +47,12 @@ mkdir -p results/slurm
 nvidia-smi
 
 for SEED in 42 43 44; do
+  CKPT="results/procgen_easy/${EXP_NAME}/seed_${SEED}/${TASK}/weights_final.pt"
+  if [ -f "${CKPT}" ]; then
+    echo "Skipping seed ${SEED} — already finished: ${CKPT}"
+    continue
+  fi
+
   srun --gres=gpu:1 python -m src.experiments.run_performance_train \
     --suite procgen_easy \
     --task "${TASK}" \

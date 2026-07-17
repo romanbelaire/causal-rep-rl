@@ -6,7 +6,6 @@
 #SBATCH --time=0-01:00:00
 #SBATCH --mail-type=END
 #SBATCH --output=%u.plot_s_.%j.out
-#SBATCH --error=%u.plot_s_.%j.err
 #SBATCH --requeue
 #SBATCH --partition=researchshort
 #SBATCH --account=pradeepresearch

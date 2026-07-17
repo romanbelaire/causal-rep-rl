@@ -10,7 +10,7 @@ import torch.nn as nn
 from src.agents.ppo import PPO
 from src.losses.mico import compute_mico_loss, reward_dispersion
 from src.losses.pl_coupling import compute_pl_coupling_loss
-from src.utils.bisimulation_utils import VAEEncoderTarget
+from src.utils.bisimulation_utils import VAEEncoderTarget, encode_phi
 
 
 class CTRO(PPO):
@@ -38,8 +38,17 @@ class CTRO(PPO):
         self.encoder_target = None
         if self.alpha > 0:
             if not hasattr(self.critic, "encode"):
-                raise ValueError("MICo loss requires VAE critic with encode()")
+                raise ValueError("MICo loss requires critic with encode()")
             self.encoder_target = VAEEncoderTarget(self.critic).to(device)
+
+    def _encode_batch(self, batch_obs: torch.Tensor) -> torch.Tensor:
+        if self.repr_net is not None:
+            return self.repr_net(batch_obs)
+        return encode_phi(
+            self.critic,
+            batch_obs,
+            embed_ball_radius=self.mico_embed_ball_radius,
+        )
 
     @property
     def needs_transition_batch(self) -> bool:
