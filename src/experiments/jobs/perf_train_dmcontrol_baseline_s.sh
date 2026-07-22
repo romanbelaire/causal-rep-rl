@@ -1,9 +1,9 @@
 #!/bin/bash
 
 #SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:1
-#SBATCH --mem=64gb
+#SBATCH --mem=32gb
 #SBATCH --time=2-00:00:00
 #SBATCH --array=0-3
 #SBATCH --constraint=l40|l40s|a100|a40
@@ -16,9 +16,11 @@
 #SBATCH --mail-user=rbelaire.2021@phdcs.smu.edu.sg
 #SBATCH --job-name=ppo-train-dmcontrol
 
-# Train one DMControl task with vanilla PPO across seeds 42/43/44.
-# Array index selects the task. Checkpoints -> results/dmcontrol_state/exp_baseline/seed_{N}/{task}/
-# Skips seeds with weights_final.pt; cancelled mid-run seeds restart from scratch.
+# Train ONE DMControl task (array index selects it) with vanilla PPO, serial rollout
+# num_envs=1. Each task gets its own allocation, and inside it the 3 seeds run as a
+# concurrency pool (3 single-env procs, ~1 core each) sharing one small GPU.
+# Checkpoints -> results/dmcontrol_state/exp_baseline/seed_{N}/{task}/
+# Skips seeds with weights_final.pt. Override MAX_PARALLEL / THREADS_PER_PROC to tune.
 
 module purge
 module load Python/3.10.16-GCCcore-13.3.0
@@ -38,26 +40,22 @@ export MUJOCO_GL=egl
 
 pip install -q 'dm_control==1.0.38' 'mujoco==3.6.0' shimmy
 
-TASKS=(cheetah-run walker-walk hopper-hop cartpole-swingup)
-TASK="${TASKS[$SLURM_ARRAY_TASK_ID]}"
-EXP_NAME="${EXP_NAME:-exp_baseline}"
-
 mkdir -p results/slurm
 
 nvidia-smi
 
-for SEED in 42 43 44; do
-  CKPT="results/dmcontrol_state/${EXP_NAME}/seed_${SEED}/${TASK}/weights_final.pt"
-  if [ -f "${CKPT}" ]; then
-    echo "Skipping seed ${SEED} — already finished: ${CKPT}"
-    continue
-  fi
+ALL_TASKS=(cheetah-run walker-walk hopper-hop cartpole-swingup)
+TASKS=("${ALL_TASKS[$SLURM_ARRAY_TASK_ID]}")
+SEEDS=(42 43 44)
+SUITE=dmcontrol_state
+RESULTS_SUBDIR=dmcontrol_state
+EXP_NAME="${EXP_NAME:-exp_baseline}"
+EXTRA_ARGS=(--agent ppo)
+# Serial rollout (num_envs=1): 1 core/proc; this array task pools its 3 seeds.
+ENVS_PER_PROC="${ENVS_PER_PROC:-1}"
+THREADS_PER_PROC="${THREADS_PER_PROC:-1}"
+MAX_PARALLEL="${MAX_PARALLEL:-3}"
 
-  srun --gres=gpu:1 python -m src.experiments.run_performance_train \
-    --suite dmcontrol_state \
-    --task "${TASK}" \
-    --seed "${SEED}" \
-    --exp-name "${EXP_NAME}" \
-    --agent ppo \
-    --device cuda
-done
+source src/experiments/jobs/_parallel_seeds.sh
+run_training_pool
+exit $?

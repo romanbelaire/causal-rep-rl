@@ -5,6 +5,9 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+ALLOWED_OBS_NORM = frozenset({"running_mean_std"})
+ALLOWED_REWARD_NORM = frozenset({"return_var_scale"})
+
 
 class RunningMeanStd:
     """Welford running mean/variance for vector or tensor observations."""
@@ -82,6 +85,24 @@ class RewardNormalizer:
             self.reset_episode()
         return float(normalized)
 
+    def normalize_batch(
+        self,
+        rewards: np.ndarray,
+        dones: np.ndarray,
+        episode_returns: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Vectorized version for N parallel envs sharing one return-variance estimate.
+
+        `episode_returns` is the caller-held per-env discounted-return accumulator
+        (shape [N]); it is advanced here and the post-reset copy is returned so the
+        rollout can carry it to the next step.
+        """
+        episode_returns = episode_returns * self.gamma + rewards
+        self.return_rms.update(episode_returns.astype(np.float64))
+        normalized = rewards / np.sqrt(self.return_rms.var + self.epsilon)
+        episode_returns = np.where(dones, 0.0, episode_returns)
+        return normalized.astype(np.float32), episode_returns
+
     def state_dict(self) -> dict:
         return {
             "gamma": self.gamma,
@@ -97,21 +118,50 @@ class RewardNormalizer:
 
 
 class PerformanceNormalizer:
-    """Observation + reward normalization for a single training run."""
+    """Observation + reward normalization for a single training run.
 
-    def __init__(self, obs_shape: tuple[int, ...], gamma: float):
+    Modes (fail fast on unknown):
+      obs_norm="running_mean_std"  — (x-mean)/std with ±obs_norm_clip
+      reward_norm_mode="return_var_scale" — CleanRL return-std scale, no reward clip
+    """
+
+    def __init__(
+        self,
+        obs_shape: tuple[int, ...],
+        gamma: float,
+        obs_norm: str = "running_mean_std",
+        obs_norm_clip: float = 10.0,
+        reward_norm_mode: str = "return_var_scale",
+    ):
+        if obs_norm not in ALLOWED_OBS_NORM:
+            raise ValueError(f"Unknown obs_norm={obs_norm!r}; allowed={sorted(ALLOWED_OBS_NORM)}")
+        if reward_norm_mode not in ALLOWED_REWARD_NORM:
+            raise ValueError(
+                f"Unknown reward_norm_mode={reward_norm_mode!r}; "
+                f"allowed={sorted(ALLOWED_REWARD_NORM)}"
+            )
+        self.obs_norm = obs_norm
+        self.obs_norm_clip = float(obs_norm_clip)
+        self.reward_norm_mode = reward_norm_mode
         self.obs_rms = RunningMeanStd(obs_shape)
         self.reward_norm = RewardNormalizer(gamma)
 
     def observe(self, obs: torch.Tensor) -> torch.Tensor:
         self.obs_rms.update(obs.detach().cpu().numpy())
-        return self.obs_rms.normalize(obs)
+        return self.obs_rms.normalize(obs, clip=self.obs_norm_clip)
+
+    def normalize_obs(self, obs: torch.Tensor) -> torch.Tensor:
+        """Z-score without updating running stats (e.g. next_obs in vec rollouts)."""
+        return self.obs_rms.normalize(obs, clip=self.obs_norm_clip)
 
     def reward(self, reward: float, done: bool) -> float:
         return self.reward_norm.normalize(reward, done)
 
     def state_dict(self) -> dict:
         return {
+            "obs_norm": self.obs_norm,
+            "obs_norm_clip": self.obs_norm_clip,
+            "reward_norm_mode": self.reward_norm_mode,
             "obs_rms": self.obs_rms.state_dict(),
             "reward_norm": self.reward_norm.state_dict(),
         }
@@ -120,7 +170,13 @@ class PerformanceNormalizer:
     def from_state_dict(cls, state: dict) -> PerformanceNormalizer:
         obs_shape = tuple(state["obs_rms"]["shape"])
         gamma = state["reward_norm"]["gamma"]
-        obj = cls(obs_shape, gamma)
+        obj = cls(
+            obs_shape,
+            gamma,
+            obs_norm=state.get("obs_norm", "running_mean_std"),
+            obs_norm_clip=float(state.get("obs_norm_clip", 10.0)),
+            reward_norm_mode=state.get("reward_norm_mode", "return_var_scale"),
+        )
         obj.obs_rms = RunningMeanStd.from_state_dict(state["obs_rms"])
         obj.reward_norm = RewardNormalizer.from_state_dict(state["reward_norm"])
         return obj

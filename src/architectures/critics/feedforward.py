@@ -27,28 +27,36 @@ class FeedforwardCritic(nn.Module):
             hidden_sizes: List of hidden layer sizes
             activation: Activation function name ("relu", "tanh", etc.)
         """
+        if len(hidden_sizes) == 0:
+            raise ValueError("hidden_sizes must be non-empty")
+
         super().__init__()
         self.obs_dim = obs_dim
-        
+        self.latent_dim = hidden_sizes[-1]
+
         self.activation = activation_module(activation)
-        
-        # Build network
+
+        # Torso: obs -> penultimate features Z. The value function is affine in Z,
+        # so these features are the representation whose geometry (feature rank,
+        # PL ratio) we probe for plain PPO.
         layers = []
         input_dim = obs_dim
         for hidden_size in hidden_sizes:
             layers.append(nn.Linear(input_dim, hidden_size))
             layers.append(self.activation)
             input_dim = hidden_size
-        
-        # Output layer (single value)
-        layers.append(nn.Linear(input_dim, 1))
-        
-        self.network = nn.Sequential(*layers)
-        
-        # Initialize output layer to output small values
-        nn.init.orthogonal_(self.network[-1].weight, gain=0.01)
-        nn.init.zeros_(self.network[-1].bias)
-    
+        self.encoder = nn.Sequential(*layers)
+
+        self.value_head = nn.Linear(self.latent_dim, 1)
+        nn.init.orthogonal_(self.value_head.weight, gain=0.01)
+        nn.init.zeros_(self.value_head.bias)
+
+    def encode(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return (Z, dummy_log_std) for metric-evaluator API compatibility."""
+        z = self.encoder(obs)
+        dummy_log_std = torch.zeros_like(z)
+        return z, dummy_log_std
+
     def forward(self, obs: torch.Tensor) -> torch.Tensor:
         """
         Forward pass.
@@ -59,5 +67,6 @@ class FeedforwardCritic(nn.Module):
         Returns:
             Value estimates [batch_size, 1] or [1]
         """
-        return self.network(obs)
+        z, _ = self.encode(obs)
+        return self.value_head(z)
 

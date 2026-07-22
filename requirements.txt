@@ -19,4 +19,5 @@ matplotlib>=3.7.0
 
 # Utilities
 tqdm
+optuna>=3.0.0
 

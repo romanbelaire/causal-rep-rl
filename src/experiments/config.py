@@ -141,6 +141,12 @@ PROCGEN_TRAINING_CONFIG = {
     "eval_episodes": 10,
     "metric_pl_max_samples": 64,
     "print_every_epochs": 10,
+    # Serial rollout (num_envs=1). Set to 64 to vectorize: Procgen batches natively
+    # in C, giving the canonical 64 envs x 256 steps = 16384-transition rollout.
+    "num_envs": 1,
+    "obs_norm": "running_mean_std",
+    "obs_norm_clip": 10.0,
+    "reward_norm": "return_var_scale",
 }
 
 DMCONTROL_TRAINING_CONFIG = {
@@ -149,8 +155,32 @@ DMCONTROL_TRAINING_CONFIG = {
     "total_epochs": 8_000_000 // 2048,
     "eval_frequency": 50,
     "eval_episodes": 10,
+    "metric_pl_max_samples": 64,
     "print_every_epochs": 20,
+    # Serial rollout (num_envs=1). Set to 8 to vectorize via subprocess MuJoCo
+    # workers (one env per core): 8 envs x 256 steps = 2048-transition rollout.
+    "num_envs": 1,
+    # Obs: Welford running mean/std z-score with ±clip (not reward clipping).
+    "obs_norm": "running_mean_std",
+    "obs_norm_clip": 10.0,
+    # Reward: CleanRL discounted-return variance scaling, no mean subtract, no clip.
+    # ("Reward Normalization: False" in the SB3/recipe sense.)
+    "reward_norm": "return_var_scale",
+    # Early-stop / collapse prune (Optuna search + full runs).
+    "collapse_min_steps": 200_000,
+    "collapse_streak": 3,
 }
+
+# Per-task floor on rolling mean episode return for collapse pruning.
+DMCONTROL_COLLAPSE_FLOORS = {
+    "cartpole-swingup": 5.0,
+    "cheetah-run": 1.0,
+    "walker-walk": 1.0,
+    "hopper-hop": 0.01,
+}
+
+# Truncated Optuna search budget (confirm winners at full 8M).
+DMCONTROL_OPTUNA_SEARCH_STEPS = 1_000_000
 
 PERFORMANCE_SUITE_CONFIG = {
     "procgen_easy": {
