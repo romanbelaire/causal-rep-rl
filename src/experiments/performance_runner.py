@@ -113,6 +113,8 @@ def collect_rollout_buffer(
         "actions": [],
         "rewards": [],
         "dones": [],
+        "terminations": [],
+        "truncations": [],
         "log_probs": [],
         "values": [],
         "next_obs": [],
@@ -146,6 +148,8 @@ def collect_rollout_buffer(
             buffer["actions"].append(action)
             buffer["rewards"].append(norm_reward)
             buffer["dones"].append(done)
+            buffer["terminations"].append(terminated)
+            buffer["truncations"].append(truncated)
             buffer["log_probs"].append(log_prob)
             buffer["values"].append(value)
 
@@ -170,6 +174,8 @@ def collect_rollout_buffer(
         "actions": torch.stack(buffer["actions"][:n]),
         "rewards": torch.tensor(buffer["rewards"][:n], dtype=torch.float32),
         "dones": torch.tensor(buffer["dones"][:n], dtype=torch.bool),
+        "terminations": torch.tensor(buffer["terminations"][:n], dtype=torch.bool),
+        "truncations": torch.tensor(buffer["truncations"][:n], dtype=torch.bool),
         "log_probs": torch.stack(buffer["log_probs"][:n]),
         "values": torch.stack(buffer["values"][:n]),
         "next_obs": torch.stack(buffer["next_obs"][:n]),
@@ -196,27 +202,26 @@ def _select_action_value_batch(
 def compute_gae_vec(
     rewards: torch.Tensor,
     values: torch.Tensor,
-    dones: torch.Tensor,
-    last_values: torch.Tensor,
+    terminations: torch.Tensor,
+    truncations: torch.Tensor,
+    next_values: torch.Tensor,
     gamma: float,
     gae_lambda: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per-env GAE over [T, N] rollouts with per-env bootstrap `last_values` [N].
+    """Per-env GAE over [T, N] with V(s_{t+1}) provided as `next_values`.
 
-    `dones[t]` marks the episode ending at step t; it zeroes both the value
-    bootstrap from t+1 and the advantage carry, matching PPO.compute_gae applied
-    independently to each env's column.
+    Bootstrap unless `terminations[t]`. GAE carry resets on terminations|truncations.
     """
     T = rewards.shape[0]
+    dones = terminations | truncations
     advantages = torch.zeros_like(rewards)
-    last_gae = torch.zeros_like(last_values)
-    next_value = last_values
+    last_gae = torch.zeros_like(next_values[0])
     for t in reversed(range(T)):
-        nonterminal = (~dones[t]).float()
-        delta = rewards[t] + gamma * next_value * nonterminal - values[t]
-        last_gae = delta + gamma * gae_lambda * nonterminal * last_gae
+        non_terminal = (~terminations[t]).float()
+        non_done = (~dones[t]).float()
+        delta = rewards[t] + gamma * next_values[t] * non_terminal - values[t]
+        last_gae = delta + gamma * gae_lambda * non_done * last_gae
         advantages[t] = last_gae
-        next_value = values[t]
     returns = advantages + values
     return advantages, returns
 
@@ -241,7 +246,20 @@ def collect_rollout_buffer_vec(
     T = -(-buffer_size // num_envs)
     is_discrete = vec_env.action_space_type == "discrete"
 
-    steps = {k: [] for k in ("obs", "actions", "rewards", "dones", "log_probs", "values", "next_obs")}
+    steps = {
+        k: []
+        for k in (
+            "obs",
+            "actions",
+            "rewards",
+            "dones",
+            "terminations",
+            "truncations",
+            "log_probs",
+            "values",
+            "next_obs",
+        )
+    }
     episode_returns: list[float] = []
     running_return = np.zeros(num_envs, dtype=np.float64)
     reward_return_acc = np.zeros(num_envs, dtype=np.float64)
@@ -259,6 +277,8 @@ def collect_rollout_buffer_vec(
 
         raw_rewards = result.rewards
         dones = result.dones
+        terminations = result.terminations
+        truncations = result.truncations
         norm_rewards, reward_return_acc = normalizer.reward_norm.normalize_batch(
             raw_rewards, dones, reward_return_acc
         )
@@ -268,6 +288,8 @@ def collect_rollout_buffer_vec(
         steps["actions"].append(action.cpu())
         steps["rewards"].append(torch.from_numpy(norm_rewards))
         steps["dones"].append(torch.from_numpy(dones))
+        steps["terminations"].append(torch.from_numpy(terminations))
+        steps["truncations"].append(torch.from_numpy(truncations))
         steps["log_probs"].append(log_prob.cpu())
         steps["values"].append(value.cpu())
         steps["next_obs"].append(norm_next_obs.cpu())
@@ -280,15 +302,26 @@ def collect_rollout_buffer_vec(
 
         obs = result.obs
 
+    next_obs_t = torch.stack(steps["next_obs"])
     with torch.no_grad():
-        final_norm_obs = normalizer.normalize_obs(obs.to(device))
-        last_values = stack.critic(final_norm_obs).squeeze(-1).cpu()
+        # V(s_{t+1}) from stored bootstrap obs (terminal state on truncate/terminate).
+        flat_next = next_obs_t.reshape(T * num_envs, *next_obs_t.shape[2:]).to(device)
+        next_values = (
+            stack.critic(flat_next).squeeze(-1).cpu().reshape(T, num_envs)
+        )
 
     rewards = torch.stack(steps["rewards"])
     values = torch.stack(steps["values"])
-    dones_t = torch.stack(steps["dones"])
+    terminations_t = torch.stack(steps["terminations"])
+    truncations_t = torch.stack(steps["truncations"])
     advantages, returns = compute_gae_vec(
-        rewards, values, dones_t, last_values, gamma, gae_lambda
+        rewards,
+        values,
+        terminations_t,
+        truncations_t,
+        next_values,
+        gamma,
+        gae_lambda,
     )
 
     def flatten(x: torch.Tensor) -> torch.Tensor:
@@ -298,7 +331,9 @@ def collect_rollout_buffer_vec(
         "obs": flatten(torch.stack(steps["obs"])),
         "actions": flatten(torch.stack(steps["actions"])),
         "rewards": flatten(rewards),
-        "dones": flatten(dones_t),
+        "dones": flatten(torch.stack(steps["dones"])),
+        "terminations": flatten(terminations_t),
+        "truncations": flatten(truncations_t),
         "log_probs": flatten(torch.stack(steps["log_probs"])),
         "values": flatten(values),
         "next_obs": flatten(torch.stack(steps["next_obs"])),
@@ -427,6 +462,7 @@ def run_performance_train(
     collapse_min_steps = int(train_cfg.get("collapse_min_steps", 200_000))
     collapse_streak_limit = int(train_cfg.get("collapse_streak", 3))
     if collapse_floor is None and suite_name == "dmcontrol_state":
+        # May be None for tasks that disable collapse (e.g. hopper-hop).
         collapse_floor = DMCONTROL_COLLAPSE_FLOORS[task]
 
     total_steps = 0
@@ -476,11 +512,14 @@ def run_performance_train(
                 advantages = buffer["advantages"].to(device)
                 returns = buffer["returns"].to(device)
             else:
+                with torch.no_grad():
+                    next_values = stack.critic(buffer["next_obs"]).squeeze(-1)
                 advantages, returns = agent.compute_gae(
                     buffer["rewards"],
                     buffer["values"],
                     buffer["dones"],
-                    next_value=0.0,
+                    terminations=buffer["terminations"],
+                    next_values=next_values,
                 )
 
             update_kwargs = dict(

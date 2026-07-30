@@ -202,6 +202,15 @@ Policy-on-\(Z\) is intentional: CTRO’s claim is that the policy acts in the ca
 
 Comparison is **methodological** (shared \(Z\) + MICo/PL vs end-to-end MLP on state), not architecture-identical.
 
+### Continuous PPO correctness (DMControl)
+
+Matched to CleanRL continuous PPO on four points that were previously wrong under `num_envs=1`:
+
+1. **Action / log-prob ranks** — `MLPPolicy.get_action` squeezes the batch dim for 1D obs so buffer stores `[T,A]` / `[T]` (not `[T,1,A]` / `[T,1,1]`).
+2. **Terminated vs truncated** — dm_control time limits set `truncated=True` (`discount>0`); GAE bootstraps `V(s')` on truncate and only zeroes bootstrap on true `terminated`.
+3. **Action bounds** — `DMControlWrapper.step` clips to `action_spec` (CleanRL `ClipAction`).
+4. **State-independent `log_std`** — `nn.Parameter` vector, not a per-state Linear head.
+
 ### Normalization (DMControl / Procgen performance)
 
 | Signal | Mode | Behavior |
@@ -215,9 +224,14 @@ This is the intended recipe for “Reward Normalization: False (use running vari
 
 Truncated search (1M steps) over shared PPO knobs (+ \(\alpha,\beta\) for CTRO), with MedianPruner and return-collapse early abort. One study per `(agent, task)`.
 
+**Hopper exception:** return-collapse is **off** (`DMCONTROL_COLLAPSE_FLOORS["hopper-hop"]=None`), search budget is **8M** steps, studies live under `hopper-hop_v2` (fresh DB), and cheetah/walker `best_trial.json` params are enqueued as warm starts.
+
 ```bash
-# 8 array workers: exp_baseline|exp_ctro_mlp × 4 tasks
+# 8 array workers: exp_baseline|exp_ctro_mlp × 4 tasks (1M; hopper still uses task list but prefer hopper job)
 N_TRIALS=20 sbatch src/experiments/jobs/optuna_dmcontrol_s.sh
+
+# Hopper v2 only (8M, no collapse, transfer warm-start)
+N_TRIALS=10 sbatch src/experiments/jobs/optuna_dmcontrol_hopper_s.sh
 
 # Sensitivity + confirm command scripts
 python -m src.experiments.analyze_optuna_sensitivity --optuna-root results/optuna --all

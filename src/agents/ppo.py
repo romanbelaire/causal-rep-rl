@@ -54,20 +54,38 @@ class PPO:
         values: torch.Tensor,
         dones: torch.Tensor,
         next_value: float = 0.0,
+        terminations: torch.Tensor | None = None,
+        next_values: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """GAE with Gymnasium-style terminated vs truncated handling.
+
+        - `dones` = terminated | truncated (resets GAE carry across episodes)
+        - `terminations` = true episode failures only (no value bootstrap)
+        - If `next_values` is provided (V(s_{t+1}) per step), use those for bootstraps;
+          otherwise fall back to the reverse `next_value` chain (legacy Minigrid path).
+        """
+        if terminations is None:
+            terminations = dones
+
         advantages = torch.zeros_like(rewards)
         last_gae = 0.0
+        T = len(rewards)
 
-        for t in reversed(range(len(rewards))):
-            if dones[t]:
-                delta = rewards[t] - values[t]
-                last_gae = delta
-            else:
-                delta = rewards[t] + self.gamma * next_value - values[t]
-                last_gae = delta + self.gamma * self.gae_lambda * last_gae
-
-            advantages[t] = last_gae
-            next_value = values[t]
+        if next_values is not None:
+            for t in reversed(range(T)):
+                non_terminal = (~terminations[t]).float()
+                non_done = (~dones[t]).float()
+                delta = rewards[t] + self.gamma * next_values[t] * non_terminal - values[t]
+                last_gae = delta + self.gamma * self.gae_lambda * non_done * last_gae
+                advantages[t] = last_gae
+        else:
+            for t in reversed(range(T)):
+                non_terminal = (~terminations[t]).float()
+                non_done = (~dones[t]).float()
+                delta = rewards[t] + self.gamma * next_value * non_terminal - values[t]
+                last_gae = delta + self.gamma * self.gae_lambda * non_done * last_gae
+                advantages[t] = last_gae
+                next_value = values[t]
 
         returns = advantages + values
         return advantages, returns

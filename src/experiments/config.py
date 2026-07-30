@@ -172,16 +172,25 @@ DMCONTROL_TRAINING_CONFIG = {
 }
 
 # Per-task floor on rolling mean episode return for collapse pruning.
+# None disables return-collapse (MedianPruner / NaN fail still apply in Optuna).
 DMCONTROL_COLLAPSE_FLOORS = {
     "cartpole-swingup": 5.0,
     "cheetah-run": 1.0,
     "walker-walk": 1.0,
-    "hopper-hop": 0.01,
+    # hopper-hop is sparse/unstable: train mean often returns to ~0 between rare hops.
+    "hopper-hop": None,
 }
 
-# Truncated Optuna search budget (confirm winners at full 8M).
+# Truncated Optuna search budget (confirm winners at full 8M when search used 1M).
 DMCONTROL_OPTUNA_SEARCH_STEPS = 1_000_000
-
+# hopper needs a longer search horizon; confirm is the same 8M budget.
+DMCONTROL_OPTUNA_SEARCH_STEPS_BY_TASK = {
+    "hopper-hop": 8_000_000,
+}
+# Donor tasks whose best_trial.json is enqueued to warm-start hopper studies.
+DMCONTROL_HOPPER_TRANSFER_TASKS = ("cheetah-run", "walker-walk")
+# Fresh Optuna study folder for hopper (avoids TPE pollution from the all-pruned v1 study).
+DMCONTROL_HOPPER_STUDY_KEY = "hopper-hop_v2"
 PERFORMANCE_SUITE_CONFIG = {
     "procgen_easy": {
         "arch": PROCGEN_ARCH_CONFIG,

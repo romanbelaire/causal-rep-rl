@@ -30,13 +30,19 @@ from src.evaluation.suites import EVAL_SUITES, parse_dmcontrol_task
 class VecStepResult:
     """One vectorized transition: batched next-step feed obs + bootstrap obs."""
 
-    __slots__ = ("obs", "rewards", "dones", "next_obs")
+    __slots__ = ("obs", "rewards", "dones", "terminations", "truncations", "next_obs")
 
-    def __init__(self, obs, rewards, dones, next_obs):
+    def __init__(self, obs, rewards, dones, next_obs, terminations=None, truncations=None):
         self.obs = obs
         self.rewards = rewards
         self.dones = dones
         self.next_obs = next_obs
+        if terminations is None:
+            terminations = dones
+        if truncations is None:
+            truncations = np.zeros_like(dones, dtype=bool)
+        self.terminations = terminations
+        self.truncations = truncations
 
 
 class ProcgenVectorEnv:
@@ -102,7 +108,7 @@ def _dmcontrol_worker(remote, domain: str, task_name: str, seed: int):
                 feed = feed.numpy()
             else:
                 feed = terminal
-            remote.send((feed, reward, done, terminal))
+            remote.send((feed, reward, done, terminated, truncated, terminal))
         elif cmd == "close":
             env.close()
             remote.close()
@@ -145,17 +151,21 @@ class SubprocVectorEnv:
     def step(self, actions: np.ndarray) -> VecStepResult:
         for remote, action in zip(self._remotes, actions):
             remote.send(("step", np.ascontiguousarray(action, dtype=np.float32)))
-        feeds, rewards, dones, terminals = [], [], [], []
+        feeds, rewards, dones, terminations, truncations, terminals = [], [], [], [], [], []
         for remote in self._remotes:
-            feed, reward, done, terminal = remote.recv()
+            feed, reward, done, terminated, truncated, terminal = remote.recv()
             feeds.append(feed)
             rewards.append(reward)
             dones.append(done)
+            terminations.append(terminated)
+            truncations.append(truncated)
             terminals.append(terminal)
         return VecStepResult(
             obs=torch.from_numpy(np.stack(feeds, axis=0).astype(np.float32)),
             rewards=np.asarray(rewards, dtype=np.float32),
             dones=np.asarray(dones, dtype=bool),
+            terminations=np.asarray(terminations, dtype=bool),
+            truncations=np.asarray(truncations, dtype=bool),
             next_obs=torch.from_numpy(np.stack(terminals, axis=0).astype(np.float32)),
         )
 
