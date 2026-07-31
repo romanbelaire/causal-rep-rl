@@ -16,9 +16,9 @@
 #SBATCH --mail-user=rbelaire.2021@phdcs.smu.edu.sg
 #SBATCH --job-name=nolink-train-procgen
 
-# Negative control 2: CTRO CNN-VAE stack (shared Z, policy-on-Z, vae_coef=0.1)
+# Negative control 2: CTRO CNN-encoder stack (shared Z, policy-on-Z, vae_coef=0)
 # with the value link OFF (alpha=0, beta=0, i.e. no MICo/PL). Shows a causally-
-# informed / reconstructible representation still fails without value coupling.
+# structured representation still fails without value coupling.
 # One Procgen game per array task (serial rollout num_envs=1); inside it the 3 seeds
 # run as a concurrency pool (3 procs, ~1 core each) sharing one small GPU.
 # Checkpoints -> results/procgen_easy/exp_latent_nolink/seed_{N}/{game}/

@@ -2,7 +2,8 @@
 Aggregate performance evaluation results into a summary table.
 
 Reads performance_eval_metrics.csv files and prints mean return per task,
-split by full vs test distribution.
+split by full vs test distribution. Means/stds are averaged across seeds
+(each seed CSV under the eval root).
 """
 
 import argparse
@@ -35,18 +36,37 @@ def parse_task_distribution(key: str) -> tuple[str, str, str] | None:
 def aggregate_eval_dir(eval_root: Path) -> dict[str, dict[str, dict[str, float]]]:
     """
     Returns nested dict: task -> distribution -> {mean, std}.
-    """
-    results: dict[str, dict[str, dict[str, float]]] = {}
 
-    for csv_path in sorted(eval_root.rglob("performance_eval_metrics.csv")):
+    `mean` is the cross-seed mean of per-seed return means.
+    `std` is the cross-seed standard deviation of those means (seed variability).
+    """
+    # task -> distribution -> list of per-seed means
+    seed_means: dict[str, dict[str, list[float]]] = {}
+
+    csv_paths = sorted(eval_root.rglob("performance_eval_metrics.csv"))
+    if not csv_paths:
+        return {}
+
+    for csv_path in csv_paths:
         row = load_eval_row(csv_path)
         for key, value in row.items():
             parsed = parse_task_distribution(key)
             if parsed is None:
                 continue
             task, distribution, stat = parsed
-            results.setdefault(task, {}).setdefault(distribution, {})[stat] = value
+            if stat != "mean":
+                continue
+            seed_means.setdefault(task, {}).setdefault(distribution, []).append(value)
 
+    results: dict[str, dict[str, dict[str, float]]] = {}
+    for task, dists in seed_means.items():
+        for distribution, values in dists.items():
+            arr = np.asarray(values, dtype=np.float64)
+            results.setdefault(task, {})[distribution] = {
+                "mean": float(arr.mean()),
+                "std": float(arr.std(ddof=0)),
+                "n_seeds": float(len(arr)),
+            }
     return results
 
 

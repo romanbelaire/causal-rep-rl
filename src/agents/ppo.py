@@ -193,6 +193,9 @@ class PPO:
         total_value_loss = 0.0
         total_entropy = 0.0
         total_kl = 0.0
+        total_vae_loss = 0.0
+        total_recon_loss = 0.0
+        total_vae_kl_loss = 0.0
         extra_stats_acc: dict[str, list[float]] = {}
 
         for _epoch in range(self.num_epochs):
@@ -266,6 +269,9 @@ class PPO:
                 total_policy_loss += fwd["policy_loss"].item()
                 total_value_loss += fwd["value_loss"].item()
                 total_entropy += (-fwd["entropy_loss"]).item()
+                total_vae_loss += fwd["vae_loss"].item()
+                total_recon_loss += fwd["recon_loss"].item()
+                total_vae_kl_loss += fwd["kl_loss"].item()
 
                 with torch.no_grad():
                     kl = (batch_old_log_probs - fwd["log_probs"]).mean().item()
@@ -279,6 +285,9 @@ class PPO:
             "value_loss": total_value_loss / num_updates,
             "entropy": total_entropy / num_updates,
             "kl": total_kl / num_updates,
+            "vae_loss": total_vae_loss / num_updates,
+            "recon_loss": total_recon_loss / num_updates,
+            "vae_kl_loss": total_vae_kl_loss / num_updates,
         }
         for key, vals in extra_stats_acc.items():
             stats[key] = sum(vals) / len(vals)

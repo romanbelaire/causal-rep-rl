@@ -102,29 +102,13 @@ class CTRO(PPO):
         if self.encoder_target is not None:
             self.encoder_target.soft_update_from(self.critic, self.mico_target_update_tau)
 
-    def save(self, path: str) -> None:
-        import torch
-
-        save_dict = {
-            "policy": self.policy.state_dict(),
-            "critic": self.critic.state_dict(),
-            "unified_optimizer": self.unified_optimizer.state_dict(),
-        }
-        if self.repr_net is not None:
-            save_dict["repr_net"] = self.repr_net.state_dict()
+    def checkpoint_dict(self) -> dict:
+        save_dict = super().checkpoint_dict()
         if self.encoder_target is not None:
             save_dict["encoder_target"] = self.encoder_target.state_dict()
-        torch.save(save_dict, path)
+        return save_dict
 
-    def load(self, path: str, weights_only: bool = False) -> None:
-        import torch
-
-        checkpoint = torch.load(path, map_location=self.device)
-        self.policy.load_state_dict(checkpoint["policy"])
-        self.critic.load_state_dict(checkpoint["critic"])
-        if not weights_only:
-            self.unified_optimizer.load_state_dict(checkpoint["unified_optimizer"])
-        if self.repr_net is not None and "repr_net" in checkpoint:
-            self.repr_net.load_state_dict(checkpoint["repr_net"])
-        if self.encoder_target is not None and "encoder_target" in checkpoint:
+    def _load_checkpoint(self, checkpoint: dict, weights_only: bool = False) -> None:
+        super()._load_checkpoint(checkpoint, weights_only=weights_only)
+        if self.encoder_target is not None:
             self.encoder_target.load_state_dict(checkpoint["encoder_target"])

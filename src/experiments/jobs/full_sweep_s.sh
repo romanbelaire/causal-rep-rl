@@ -6,10 +6,11 @@
 #SBATCH -A cis260223p
 #SBATCH --mail-type=END
 #SBATCH --mail-user=rbelaire@andrew.cmu.edu
-#SBATCH --job-name=ctro-baseline
+#SBATCH --job-name=ctro-full-sweep
 #SBATCH -o logs/%x_%a.%j.out
-#SBATCH -e logs/%x_%a.%j.err
-#SBATCH --array=0-2
+
+#SBATCH --array=0-9%2
+# GPU-small MaxSubmit=10 MaxJobs=2. Resubmit with OFFSET=10 and OFFSET=20 for remaining cells.
 #SBATCH --requeue
 
 REPO=/ocean/projects/cis260223p/rbelaire/causal-rep-rl
@@ -27,5 +28,13 @@ export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
 
 SEEDS=(42 43 44)
-SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
-python -m src.experiments.exp_baseline --seed "$SEED" --device cuda
+ALPHAS=(0.01 0.1 0.5)
+BETAS=(0.01 0.1 0.5)
+OFFSET=${OFFSET:-0}
+i=$((SLURM_ARRAY_TASK_ID + OFFSET))
+if [ "$i" -ge 27 ]; then echo "i=$i out of range"; exit 0; fi
+SEED=${SEEDS[$((i % 3))]}
+cell=$((i / 3))
+ALPHA=${ALPHAS[$((cell / 3))]}
+BETA=${BETAS[$((cell % 3))]}
+python -m src.experiments.exp_full --seed "$SEED" --alpha "$ALPHA" --beta "$BETA" --device cuda

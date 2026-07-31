@@ -1,39 +1,31 @@
 #!/bin/bash
-
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
-#SBATCH --mem=200gb
-#SBATCH --time=2-00:00:00
-#SBATCH --constraint=l40|l40s|a100|a40
+#SBATCH -N 1
+#SBATCH -p GPU-small
+#SBATCH -t 08:00:00
+#SBATCH --gpus=v100-32:1
+#SBATCH -A cis260223p
 #SBATCH --mail-type=END
-#SBATCH --output=%u.full_a0p01_b0p01_s_.%j.out
-#SBATCH --requeue
-#SBATCH --partition=researchshort
-#SBATCH --account=pradeepresearch
-#SBATCH --qos=research-1-qos
-#SBATCH --mail-user=rbelaire.2021@phdcs.smu.edu.sg
+#SBATCH --mail-user=rbelaire@andrew.cmu.edu
 #SBATCH --job-name=ctro-full-a0p01-b0p01
+#SBATCH -o logs/%x_%a.%j.out
 
-module purge
-module load Python/3.10.16-GCCcore-13.3.0
-module load CUDA/12.6.0 cuDNN/9.5.0.50-CUDA-12.6.0 OpenMPI/5.0.3-GCC-13.3.0
+#SBATCH --array=0-2
+#SBATCH --requeue
 
-export NVCC_FLAGS="-allow-unsupported-compiler"
+REPO=/ocean/projects/cis260223p/rbelaire/causal-rep-rl
+cd "$REPO" || exit 1
+mkdir -p logs results/slurm
 
-cd /common/home/users/r/rbelaire.2021/causal-rep || exit 1
-source rl-venv/bin/activate
+# PyTorch + deps: Ocean conda env (Python 3.10)
+export PATH=/ocean/projects/cis260223p/rbelaire/envs/causal-rep/bin:$PATH
 
-export CPLUS_INCLUDE_PATH=$CPLUS_INCLUDE_PATH:~/LLM/llm/include/python3.10:/opt/apps/software/Python/3.10.16-GCCcore-13.3.0/include/python3.10
-export LIBRARY_PATH=$LIBRARY_PATH:~/LLM/llm/lib:/opt/apps/software/Python/3.10.16-GCCcore-13.3.0/lib
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/apps/software/Python/3.10.16-GCCcore-13.3.0/lib
+module load cuda/12.6.1
+nvidia-smi
+python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print('cuda_device:', torch.cuda.get_device_name(0))"
 
+export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
 
-mkdir -p results/slurm
-
-nvidia-smi
-
-srun --gres=gpu:1 python -m src.experiments.exp_full --seed 42 --alpha 0.01 --beta 0.01 --device cuda
-srun --gres=gpu:1 python -m src.experiments.exp_full --seed 43 --alpha 0.01 --beta 0.01 --device cuda
-srun --gres=gpu:1 python -m src.experiments.exp_full --seed 44 --alpha 0.01 --beta 0.01 --device cuda
+SEEDS=(42 43 44)
+SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}
+python -m src.experiments.exp_full --seed "$SEED" --alpha 0.01 --beta 0.01 --device cuda

@@ -57,7 +57,7 @@ PROCGEN_ARCH_CONFIG = {
     "mode": "cnn",
     "cnn": {"depths": [16, 32, 32], "emb_size": 256},
     "critic": {
-        "type": "vae",
+        "type": "encoder",
         "latent_dim": 128,
         "encoder_hidden": [256, 256],
         "decoder_hidden": [256, 256],
@@ -105,7 +105,7 @@ PROCGEN_PPO_ALGO_CONFIG = {
 
 PROCGEN_CTRO_ALGO_CONFIG = {
     **PROCGEN_PPO_ALGO_CONFIG,
-    "vae_coef": 0.1,
+    "vae_coef": 0.0,
     "alpha": 0.1,
     "beta": 0.5,
 }
@@ -135,8 +135,11 @@ DMCONTROL_CTRO_ALGO_CONFIG = {
 
 PROCGEN_TRAINING_CONFIG = {
     **BASE_TRAINING_CONFIG,
-    "buffer_size": 256 * 64,
-    "total_epochs": 25_000_000 // (256 * 64),
+    "n_envs": 64,
+    "n_steps": 256,
+    "buffer_size": 64 * 256,
+    "total_epochs": 25_000_000 // (64 * 256),
+    "checkpoint_frequency": 50,
     "eval_frequency": 500,
     "eval_episodes": 10,
     "metric_pl_max_samples": 64,

@@ -24,7 +24,12 @@ from src.utils.logging import CSVLogger
 from src.utils.normalization import PerformanceNormalizer
 
 
-def make_env(suite: EvalSuite, task: str, distribution: DistributionSpec):
+def make_env(
+    suite: EvalSuite,
+    task: str,
+    distribution: DistributionSpec,
+    num_envs: int = 1,
+):
     if suite.env_type == "procgen":
         from src.environments.procgen_wrapper import ProcgenWrapper
 
@@ -34,7 +39,10 @@ def make_env(suite: EvalSuite, task: str, distribution: DistributionSpec):
             num_levels=distribution.procgen_num_levels,
             start_level=distribution.procgen_start_level,
             keep_image_format=True,
+            num_envs=num_envs,
         )
+    if num_envs != 1:
+        raise ValueError(f"num_envs>1 only supported for procgen, got env_type={suite.env_type}")
     if suite.env_type == "dmcontrol":
         from src.environments.dmcontrol_wrapper import DMControlWrapper
 

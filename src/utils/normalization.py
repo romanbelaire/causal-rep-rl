@@ -66,24 +66,34 @@ class RunningMeanStd:
 
 
 class RewardNormalizer:
-    """Discounted-return variance normalization (CleanRL-style)."""
+    """Discounted-return variance normalization (CleanRL-style).
+
+    Supports scalar (eval) and vectorized (num_envs>1) rewards.
+    """
 
     def __init__(self, gamma: float, epsilon: float = 1e-8):
         self.gamma = gamma
         self.epsilon = epsilon
         self.return_rms = RunningMeanStd(())
-        self.episode_return = 0.0
+        self.returns = np.zeros((), dtype=np.float64)
 
     def reset_episode(self) -> None:
-        self.episode_return = 0.0
+        self.returns = np.zeros_like(self.returns)
 
-    def normalize(self, reward: float, done: bool) -> float:
-        self.episode_return = self.episode_return * self.gamma + reward
-        self.return_rms.update(np.array([self.episode_return], dtype=np.float64))
-        normalized = reward / np.sqrt(self.return_rms.var + self.epsilon)
-        if done:
-            self.reset_episode()
-        return float(normalized)
+    def normalize(
+        self, reward: float | np.ndarray, done: bool | np.ndarray
+    ) -> float | np.ndarray:
+        reward_arr = np.asarray(reward, dtype=np.float64)
+        done_arr = np.asarray(done, dtype=np.float64)
+        if self.returns.shape != reward_arr.shape:
+            self.returns = np.zeros(reward_arr.shape, dtype=np.float64)
+        self.returns = self.returns * self.gamma + reward_arr
+        self.return_rms.update(self.returns.reshape(-1))
+        normalized = reward_arr / np.sqrt(self.return_rms.var + self.epsilon)
+        self.returns = self.returns * (1.0 - done_arr)
+        if normalized.ndim == 0:
+            return float(normalized)
+        return normalized.astype(np.float32)
 
     def normalize_batch(
         self,

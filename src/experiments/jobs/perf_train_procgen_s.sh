@@ -16,10 +16,11 @@
 #SBATCH --mail-user=rbelaire.2021@phdcs.smu.edu.sg
 #SBATCH --job-name=ctro-train-procgen
 
-# Train ONE Procgen game (array index selects it) with CTRO (CNN-VAE stack, 25M
-# steps, serial rollout num_envs=1). Each game gets its own allocation, and inside
-# it the 3 seeds run as a concurrency pool (3 procs, ~1 core each) sharing one GPU.
-# Checkpoints -> results/procgen_easy/exp_full/seed_{N}/{game}/
+# Train ONE Procgen game (array index selects it) with CTRO (CNN-encoder stack,
+# no VAE, 25M steps, serial rollout num_envs=1). Each game gets its own allocation,
+# and inside it the 3 seeds run as a concurrency pool (3 procs, ~1 core each)
+# sharing one GPU. Default EXP_NAME=exp_ctro_cnn.
+# Checkpoints -> results/procgen_easy/${EXP_NAME}/seed_{N}/{game}/
 # Skips seeds with weights_final.pt. Lower MAX_PARALLEL if VRAM OOMs.
 
 module purge
@@ -49,7 +50,7 @@ TASKS=("${ALL_TASKS[$SLURM_ARRAY_TASK_ID]}")
 SEEDS=(42 43 44)
 SUITE=procgen_easy
 RESULTS_SUBDIR=procgen_easy
-EXP_NAME="${EXP_NAME:-exp_full}"
+EXP_NAME="${EXP_NAME:-exp_ctro_cnn}"
 EXTRA_ARGS=(--agent ctro)
 # Serial rollout (num_envs=1): ~1 core/proc; this array task pools its 3 seeds.
 ENVS_PER_PROC="${ENVS_PER_PROC:-1}"

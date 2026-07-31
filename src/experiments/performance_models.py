@@ -6,6 +6,7 @@ import torch.nn as nn
 
 from src.agents.ctro import CTRO
 from src.agents.ppo import PPO
+from src.architectures.critics.cnn_encoder_critic import CNNEncoderCritic
 from src.architectures.critics.cnn_vae_critic import CNNVAECritic
 from src.architectures.critics.feedforward import FeedforwardCritic
 from src.architectures.critics.impala_value_critic import ImpalaValueCritic
@@ -51,6 +52,77 @@ def _create_mlp_encoder_critic(obs_dim: int, arch_cfg: dict, device: str) -> MLP
     ).to(device)
 
 
+def _create_cnn_encoder_critic(
+    obs_shape: tuple[int, int, int],
+    arch_cfg: dict,
+    device: str,
+) -> CNNEncoderCritic:
+    c = arch_cfg["critic"]
+    cnn = arch_cfg.get("cnn", {})
+    return CNNEncoderCritic(
+        obs_shape=obs_shape,
+        latent_dim=c["latent_dim"],
+        emb_size=cnn.get("emb_size", 256),
+        depths=tuple(cnn.get("depths", [16, 32, 32])),
+        activation=c.get("activation", "gelu"),
+        value_hidden=c.get("value_hidden", [128, 128]),
+    ).to(device)
+
+
+def _create_cnn_vae_critic(
+    obs_shape: tuple[int, int, int],
+    arch_cfg: dict,
+    device: str,
+) -> CNNVAECritic:
+    c = arch_cfg["critic"]
+    cnn = arch_cfg.get("cnn", {})
+    return CNNVAECritic(
+        obs_shape=obs_shape,
+        latent_dim=c["latent_dim"],
+        emb_size=cnn.get("emb_size", 256),
+        depths=tuple(cnn.get("depths", [16, 32, 32])),
+        activation=c.get("activation", "gelu"),
+        beta=c.get("beta", 1.0),
+        value_hidden=c.get("value_hidden", [128, 128]),
+    ).to(device)
+
+
+def _pixel_ctro_stack(
+    obs_shape: tuple[int, int, int],
+    action_dim: int,
+    action_space_type: str,
+    arch_cfg: dict,
+    device: str,
+    stack_type_override: str | None = None,
+) -> PerformanceStack:
+    """Procgen CTRO: encoder (no VAE) by default; VAE when critic.type==vae or override."""
+    c = arch_cfg["critic"]
+    critic_type = c.get("type", "encoder")
+    use_vae = stack_type_override == "ctro_cnn_vae" or (
+        stack_type_override is None and critic_type == "vae"
+    )
+    if use_vae:
+        critic = _create_cnn_vae_critic(obs_shape, arch_cfg, device)
+        stack_type = "ctro_cnn_vae"
+    else:
+        critic = _create_cnn_encoder_critic(obs_shape, arch_cfg, device)
+        stack_type = "ctro_cnn"
+    policy = _create_latent_policy(
+        c["latent_dim"],
+        action_dim,
+        arch_cfg,
+        device,
+        action_space_type,
+    )
+    return PerformanceStack(
+        policy=policy,
+        critic=critic,
+        policy_on_latent=True,
+        pixel_obs=True,
+        stack_type=stack_type,
+    )
+
+
 def _create_mlp_latent_policy(
     latent_dim: int,
     action_dim: int,
@@ -85,28 +157,12 @@ def build_performance_stack(
         emb_size = cnn.get("emb_size", 256)
         depths = tuple(cnn.get("depths", [16, 32, 32]))
         if is_ctro:
-            critic = CNNVAECritic(
-                obs_shape=obs_shape,
-                latent_dim=c["latent_dim"],
-                emb_size=emb_size,
-                depths=depths,
-                activation=c.get("activation", "gelu"),
-                beta=c.get("beta", 1.0),
-                value_hidden=c.get("value_hidden", [128, 128]),
-            ).to(device)
-            policy = _create_latent_policy(
-                c["latent_dim"],
+            return _pixel_ctro_stack(
+                obs_shape,
                 env.action_dim,
+                env.action_space_type,
                 arch_cfg,
                 device,
-                env.action_space_type,
-            )
-            return PerformanceStack(
-                policy=policy,
-                critic=critic,
-                policy_on_latent=True,
-                pixel_obs=True,
-                stack_type="ctro_cnn_vae",
             )
 
         critic = ImpalaValueCritic(obs_shape, emb_size=emb_size, depths=depths).to(device)
@@ -184,29 +240,13 @@ def build_performance_stack_from_config(
         emb_size = cnn.get("emb_size", 256)
         depths = tuple(cnn.get("depths", [16, 32, 32]))
         if is_ctro:
-            critic = CNNVAECritic(
-                obs_shape=obs_shape_t,
-                latent_dim=c["latent_dim"],
-                emb_size=emb_size,
-                depths=depths,
-                activation=c.get("activation", "gelu"),
-                beta=c.get("beta", 1.0),
-                value_hidden=c.get("value_hidden", [128, 128]),
-            ).to(device)
-            policy = IMPALAPolicy(
-                c["latent_dim"],
+            return _pixel_ctro_stack(
+                obs_shape_t,
                 action_dim,
-                p["hidden_sizes"],
-                p["activation"],
                 action_space_type,
-                p["num_residual_blocks"],
-            ).to(device)
-            return PerformanceStack(
-                policy=policy,
-                critic=critic,
-                policy_on_latent=True,
-                pixel_obs=True,
-                stack_type="ctro_cnn_vae",
+                arch_cfg,
+                device,
+                stack_type_override=config.get("stack_type"),
             )
 
         critic = ImpalaValueCritic(obs_shape_t, emb_size=emb_size, depths=depths).to(device)

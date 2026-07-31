@@ -9,6 +9,24 @@ from pathlib import Path
 from typing import Any, Dict
 
 
+def truncate_metrics_csv(path: Path, max_epoch: int) -> int:
+    """Keep rows with epoch <= max_epoch. Returns number of rows kept."""
+    path = Path(path)
+    if not path.exists():
+        return 0
+    with open(path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        if fieldnames is None or "epoch" not in fieldnames:
+            raise RuntimeError(f"{path} missing epoch column; cannot truncate for resume")
+        rows = [row for row in reader if int(float(row["epoch"])) <= max_epoch]
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return len(rows)
+
+
 class CSVLogger:
     """
     CSV logger for experiment metrics.
@@ -47,6 +65,11 @@ class CSVLogger:
         if clear_existing and self.intervention_loss_file.exists():
             self.intervention_loss_file.unlink()
 
+        self._append_metrics = (
+            not clear_existing
+            and self.metrics_file.exists()
+            and self.metrics_file.stat().st_size > 0
+        )
         self.metrics_writer = None
         self.metrics_fieldnames = None
         self.metrics_file_handle = None
@@ -72,29 +95,62 @@ class CSVLogger:
         if step < 0:
             raise ValueError(f"step must be >= 0, got {step}")
         if self.metrics_file_handle is None:
-            # Initialize CSV writer
-            self.metrics_fieldnames = ["step"] + sorted(metrics.keys())
-            try:
-                # Check if file exists and is corrupted - if so, remove it
-                if self.metrics_file.exists():
-                    try:
-                        # Try to read first few bytes to check for NUL bytes or corruption
-                        with open(self.metrics_file, 'rb') as f:
-                            first_bytes = f.read(1024)
-                            if b'\x00' in first_bytes:
-                                # File contains NUL bytes - likely corrupted
-                                print(f"Warning: CSV file contains NUL bytes, removing corrupted file")
-                                self.metrics_file.unlink()
-                    except Exception:
-                        # If we can't check, try to proceed anyway
-                        pass
-                
-                self.metrics_file_handle = open(self.metrics_file, 'w', newline='', encoding='utf-8')
-                self.metrics_writer = csv.DictWriter(self.metrics_file_handle, fieldnames=self.metrics_fieldnames)
-                self.metrics_writer.writeheader()
-            except (IOError, OSError, PermissionError) as e:
-                print(f"Error: Could not create CSV file ({e})")
-                raise
+            if self._append_metrics:
+                with open(self.metrics_file, "r", newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    if reader.fieldnames is None:
+                        raise RuntimeError(f"{self.metrics_file} has no header; cannot append")
+                    self.metrics_fieldnames = list(reader.fieldnames)
+                missing = set(metrics.keys()) - set(self.metrics_fieldnames)
+                if missing:
+                    self.metrics_fieldnames = ["step"] + sorted(
+                        set(self.metrics_fieldnames[1:]) | set(metrics.keys())
+                    )
+                    existing_rows = []
+                    with open(self.metrics_file, "r", newline="", encoding="utf-8") as f:
+                        existing_rows = list(csv.DictReader(f))
+                    self.metrics_file_handle = open(
+                        self.metrics_file, "w", newline="", encoding="utf-8"
+                    )
+                    self.metrics_writer = csv.DictWriter(
+                        self.metrics_file_handle, fieldnames=self.metrics_fieldnames
+                    )
+                    self.metrics_writer.writeheader()
+                    for row in existing_rows:
+                        self.metrics_writer.writerow(
+                            {k: row.get(k, "") for k in self.metrics_fieldnames}
+                        )
+                else:
+                    self.metrics_file_handle = open(
+                        self.metrics_file, "a", newline="", encoding="utf-8"
+                    )
+                    self.metrics_writer = csv.DictWriter(
+                        self.metrics_file_handle, fieldnames=self.metrics_fieldnames
+                    )
+            else:
+                # Initialize CSV writer
+                self.metrics_fieldnames = ["step"] + sorted(metrics.keys())
+                try:
+                    # Check if file exists and is corrupted - if so, remove it
+                    if self.metrics_file.exists():
+                        try:
+                            # Try to read first few bytes to check for NUL bytes or corruption
+                            with open(self.metrics_file, 'rb') as f:
+                                first_bytes = f.read(1024)
+                                if b'\x00' in first_bytes:
+                                    # File contains NUL bytes - likely corrupted
+                                    print(f"Warning: CSV file contains NUL bytes, removing corrupted file")
+                                    self.metrics_file.unlink()
+                        except Exception:
+                            # If we can't check, try to proceed anyway
+                            pass
+                    
+                    self.metrics_file_handle = open(self.metrics_file, 'w', newline='', encoding='utf-8')
+                    self.metrics_writer = csv.DictWriter(self.metrics_file_handle, fieldnames=self.metrics_fieldnames)
+                    self.metrics_writer.writeheader()
+                except (IOError, OSError, PermissionError) as e:
+                    print(f"Error: Could not create CSV file ({e})")
+                    raise
         else:
             # Check if new fields need to be added
             new_fields = set(metrics.keys()) - set(self.metrics_fieldnames)

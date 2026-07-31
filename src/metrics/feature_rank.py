@@ -31,21 +31,32 @@ def compute_feature_rank_metrics(z: torch.Tensor) -> dict[str, float]:
     if z.dim() == 1:
         z = z.unsqueeze(0)
 
+    # CPU: logging-only; avoids flaky cuSOLVER on shared V100s (CUSOLVER_STATUS_INTERNAL_ERROR).
+    z = z.detach().float().cpu()
     z_c = z - z.mean(dim=0, keepdim=True)
-    n = z_c.shape[0]
+    frobenius_norm = torch.linalg.norm(z_c, "fro")
+    if frobenius_norm.item() < 1e-12:
+        return {
+            "feature_rank_participation_ratio": 0.0,
+            "feature_rank_nuclear_norm_ratio": 0.0,
+            "log_effective_feature_rank_pr": float("-inf"),
+            "log_effective_feature_rank_nuclear": float("-inf"),
+            "feature_rank_spectral": 0.0,
+            "feature_rank_pca": 0.0,
+            "log_effective_feature_rank_pca": float("-inf"),
+        }
 
-    cov = (z_c.T @ z_c) / n
-    eigvals = torch.linalg.eigvalsh(cov).clamp(min=1e-12)
-
-    s1 = eigvals.sum()
-    s2 = (eigvals ** 2).sum()
-    participation_ratio = (s1 ** 2) / s2
-
+    # Participation ratio via SVD of Z_c (cov eigenvalues λ_i = σ_i² / N).
+    # Avoids eigvalsh, which fails on collapsed / ill-conditioned cov.
     _, singular_values, _ = torch.linalg.svd(z_c, full_matrices=False)
+    singular_values = singular_values.clamp(min=0.0)
+    s2 = (singular_values ** 2).sum()
+    s4 = (singular_values ** 4).sum().clamp(min=1e-30)
+    participation_ratio = (s2 ** 2) / s4
+
     singular_values = singular_values.clamp(min=1e-12)
     nuclear_norm = singular_values.sum()
-    frobenius_norm = torch.linalg.norm(z_c, "fro").clamp(min=1e-12)
-    nuclear_norm_ratio = nuclear_norm / frobenius_norm
+    nuclear_norm_ratio = nuclear_norm / frobenius_norm.clamp(min=1e-12)
 
     spectral_threshold = SPECTRAL_RANK_DELTA * singular_values.max()
     spectral_rank = (singular_values > spectral_threshold).sum().float()
