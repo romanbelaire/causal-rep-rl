@@ -1,15 +1,22 @@
-"""Negative-control panels for performance suites (dmcontrol_state / procgen_easy).
+"""Performance panels for dmcontrol_state / dmcontrol_pixels / procgen_easy.
 
-Three-way comparison per task:
+Three-way comparison per task (or two-way for stress):
   BASELINE       plain PPO (no shared Z, no value link)
   LATENT_NOLINK  CTRO stack (shared Z) with alpha=beta=0 (no MICo/PL)
   CTRO           full CTRO (value link on)
+
+Panel presets (--suite):
+  dmcontrol_state         default default-HP three-way
+  dmcontrol_state_shared  Optuna t8 matched HPs (exp_shared_*)
+  dmcontrol_state_stress  on-Z stress (exp_stress_*)
+  dmcontrol_pixels        same-task pixel suite
+  procgen_easy            Procgen three-way
 
 Panel A: final_bars.png       return / mu_PL / PR side-by-side
 Panel B: mu_pl_vs_return.png  mu_PL vs return, colored by method
 Panel C: dual_axis.png        return + mu_PL over training, one subplot per cell
 
-Layout read: results/{suite}/{exp_name}/seed_{seed}/{task}/metrics.csv
+Layout read: results/{results_suite}/{exp_name}/seed_{seed}/{task}/metrics.csv
 Performance train CSVs log mean_episode_return (train return), not eval_return_mean,
 so return is taken from mean_episode_return.
 """
@@ -28,19 +35,53 @@ RETURN_METRIC = "mean_episode_return"
 MU_METRIC = "mu_pl_q05"
 PR_METRIC = "feature_rank_participation_ratio"
 
-# Positive-control exp name differs by suite.
-SUITE_CELLS = {
-    "dmcontrol_state": [
-        ("BASELINE", "exp_baseline"),
-        ("LATENT_NOLINK", "exp_latent_nolink"),
-        ("CTRO", "exp_ctro_mlp"),
-    ],
-    "procgen_easy": [
-        ("BASELINE", "exp_baseline"),
-        ("LATENT_NOLINK", "exp_latent_nolink"),
-        ("CTRO", "exp_full"),
-    ],
+# Positive-control exp name differs by suite / recipe.
+# Keys are panel presets; results_suite is the on-disk results/{suite}/ folder.
+PANEL_PRESETS = {
+    "dmcontrol_state": {
+        "results_suite": "dmcontrol_state",
+        "cells": [
+            ("BASELINE", "exp_baseline"),
+            ("LATENT_NOLINK", "exp_latent_nolink"),
+            ("CTRO", "exp_ctro_mlp"),
+        ],
+    },
+    "dmcontrol_state_shared": {
+        "results_suite": "dmcontrol_state",
+        "cells": [
+            ("BASELINE", "exp_shared_baseline"),
+            ("LATENT_NOLINK", "exp_shared_latent_nolink"),
+            ("CTRO", "exp_shared_ctro"),
+        ],
+    },
+    "dmcontrol_state_stress": {
+        "results_suite": "dmcontrol_state",
+        "cells": [
+            ("LATENT_NOLINK", "exp_stress_latent_nolink"),
+            ("CTRO", "exp_stress_ctro"),
+        ],
+    },
+    "dmcontrol_pixels": {
+        "results_suite": "dmcontrol_pixels",
+        "cells": [
+            ("BASELINE", "exp_baseline"),
+            ("LATENT_NOLINK", "exp_latent_nolink"),
+            ("CTRO", "exp_ctro"),
+        ],
+    },
+    "procgen_easy": {
+        "results_suite": "procgen_easy",
+        "cells": [
+            ("BASELINE", "exp_baseline"),
+            ("LATENT_NOLINK", "exp_latent_nolink"),
+            ("CTRO", "exp_full"),
+        ],
+    },
 }
+
+# Backward-compatible alias used by older call sites.
+SUITE_CELLS = {k: v["cells"] for k, v in PANEL_PRESETS.items()}
+
 
 COLORS = {
     "BASELINE": "#d62728",
@@ -339,7 +380,7 @@ def main() -> None:
         description="Negative-control Panel A/B/C for a performance suite task"
     )
     parser.add_argument(
-        "--suite", type=str, required=True, choices=list(SUITE_CELLS.keys())
+        "--suite", type=str, required=True, choices=list(PANEL_PRESETS.keys())
     )
     parser.add_argument("--task", type=str, required=True)
     parser.add_argument("--results-root", type=str, default="results")
@@ -347,12 +388,13 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, nargs="+", default=DEFAULT_SEEDS)
     args = parser.parse_args()
 
-    results_root = Path(args.results_root) / args.suite
+    preset = PANEL_PRESETS[args.suite]
+    results_root = Path(args.results_root) / preset["results_suite"]
     output_dir = Path(
         args.output_dir or f"plots/{args.suite}/{args.task}"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    cells = SUITE_CELLS[args.suite]
+    cells = preset["cells"]
     seeds = args.seeds
     task = args.task
 

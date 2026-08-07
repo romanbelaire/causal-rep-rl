@@ -52,6 +52,15 @@ def make_env(
             task_name=task_name,
             random_seed=distribution.dmcontrol_seed_offset,
         )
+    if suite.env_type == "dmcontrol_pixels":
+        from src.environments.dmcontrol_pixel_wrapper import DMControlPixelWrapper
+
+        domain, task_name = parse_dmcontrol_task(task)
+        return DMControlPixelWrapper(
+            domain_name=domain,
+            task_name=task_name,
+            random_seed=distribution.dmcontrol_seed_offset,
+        )
     raise ValueError(f"Unknown env_type: {suite.env_type}")
 
 

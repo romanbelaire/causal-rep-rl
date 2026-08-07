@@ -24,6 +24,18 @@ def main():
     parser.add_argument("--agent", type=str, default="ctro", choices=["ctro", "ppo"])
     parser.add_argument("--alpha", type=float, default=None)
     parser.add_argument("--beta", type=float, default=None)
+    parser.add_argument(
+        "--alpha-warmup-epochs",
+        type=int,
+        default=None,
+        help="Linear ramp of alpha over this many training epochs (0 = no warmup).",
+    )
+    parser.add_argument(
+        "--beta-warmup-epochs",
+        type=int,
+        default=None,
+        help="Linear ramp of beta over this many training epochs (0 = no warmup).",
+    )
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--entropy-coef", type=float, default=None)
     parser.add_argument("--num-epochs", type=int, default=None)
@@ -59,6 +71,10 @@ def main():
             algo_overrides["alpha"] = args.alpha
         if args.beta is not None:
             algo_overrides["beta"] = args.beta
+        if args.alpha_warmup_epochs is not None:
+            algo_overrides["alpha_warmup_epochs"] = args.alpha_warmup_epochs
+        if args.beta_warmup_epochs is not None:
+            algo_overrides["beta_warmup_epochs"] = args.beta_warmup_epochs
     else:
         algo_overrides = {"alpha": 0.0, "beta": 0.0, "vae_coef": 0.0}
 

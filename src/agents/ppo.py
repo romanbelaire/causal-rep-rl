@@ -43,6 +43,7 @@ class PPO:
 
         self.old_policy = None
         self._step = 0
+        self._training_epoch = None
 
     @property
     def needs_transition_batch(self) -> bool:
@@ -176,6 +177,7 @@ class PPO:
         next_obs: torch.Tensor | None = None,
         training_epoch: int | None = None,
     ) -> dict:
+        self._training_epoch = training_epoch
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         if self.needs_transition_batch:

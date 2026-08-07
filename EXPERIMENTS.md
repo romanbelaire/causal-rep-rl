@@ -247,7 +247,7 @@ Search space / collapse floors: [`src/experiments/optuna_dmcontrol.py`](src/expe
 ### What stayed on VAE
 
 - **Minigrid** CTRO ablations: VAE + latent IMPALA (controlled loss ablations).
-- **Procgen** CTRO: still CNN-VAE + latent policy (`PROCGEN_CTRO_ALGO_CONFIG` keeps `vae_coef=0.1`). Pixel domains still motivate a reconstructible latent; DMControl state does not.
+- **Procgen / DMControl pixels** CTRO default is now non-VAE `CNNEncoderCritic` (`critic.type=encoder`, `vae_coef=0`). VAE remains available via `critic.type=vae` / stack `ctro_cnn_vae`.
 
 ### Launch
 
@@ -259,6 +259,64 @@ sbatch src/experiments/jobs/perf_eval_dmcontrol_baseline_s.sh
 ```
 
 Legacy VAE DMControl runs (if any) used `exp_full` / `stack_type=ctro_mlp_vae`; eval still reloads that stack from checkpoint config for backward compatibility.
+
+---
+
+## Matched parity, on-Z stress, and DMControl pixels
+
+Publishable recipe after continuous-PPO fixes and Optuna (CTRO trial 8 as shared HPs):
+
+| Knob | Shared (parity) | Stress (on-Z failure hunt) |
+|------|-----------------|----------------------------|
+| `learning_rate` | `1.0128e-4` | `5e-4` |
+| `entropy_coef` | `0.0408` | `0` |
+| `num_epochs` | `20` | `40` |
+| `policy_hidden` | `256,256` | `256,256` |
+| CTRO \(\alpha,\beta\) | `0.00205`, `0.532` | same (protection on) |
+| latent_nolink \(\alpha,\beta\) | `0`, `0` | `0`, `0` |
+| CTRO warmup | `alpha/beta_warmup_epochs=500` (~1M steps) | none |
+
+**Primary on-Z control is `latent_nolink`**, not raw-obs PPO. Baseline remains a methodological reference (\(\pi(a|s)\)).
+
+Do **not** overwrite old `exp_baseline` / `exp_ctro_mlp` / `exp_latent_nolink` checkpoints; shared/stress use new `EXP_NAME`s.
+
+### State parity (8M × 3 seeds)
+
+```bash
+sbatch src/experiments/jobs/perf_shared_hps_dmcontrol_s.sh
+# array 0-11 = 3 agents × 4 tasks → exp_shared_{baseline,latent_nolink,ctro}
+```
+
+α/β ramp in [`ctro.py`](src/agents/ctro.py): `eff = target * min(1, epoch / warmup_epochs)` (warmup `0` = always on). CLI: `--alpha-warmup-epochs` / `--beta-warmup-epochs`.
+
+### On-Z stress
+
+Success criterion: late **μ_PL_q05 drop + return drop** on `exp_stress_latent_nolink`; `exp_stress_ctro` holds μ_PL and return.
+
+```bash
+sbatch src/experiments/jobs/perf_stress_onz_dmcontrol_s.sh
+# array 0-7 = latent_nolink|ctro × 4 tasks
+```
+
+### Same-task pixels (`dmcontrol_pixels`)
+
+Identical four DMC tasks with 84×84 RGB ([`dmcontrol_pixel_wrapper.py`](src/environments/dmcontrol_pixel_wrapper.py)). Stacks reuse post-fix Procgen pixel CTRO: non-VAE `CNNEncoderCritic` (`ctro_cnn`), baseline `ppo_impala`, `vae_coef=0`, continuous Impala `log_std` is state-independent. Suite defaults bake in t8 lr/ent/epochs and CTRO α/β + 500-epoch warmup.
+
+```bash
+sbatch src/experiments/jobs/perf_train_dmcontrol_pixels_baseline_s.sh
+sbatch src/experiments/jobs/perf_train_dmcontrol_pixels_latent_nolink_s.sh
+sbatch src/experiments/jobs/perf_train_dmcontrol_pixels_ctro_s.sh
+```
+
+Checkpoints: `results/dmcontrol_pixels/{exp_baseline,exp_latent_nolink,exp_ctro}/seed_{N}/{task}/`.
+
+### Panels
+
+```bash
+python -m src.experiments.plot_performance_panels --suite dmcontrol_state_shared --task cheetah-run
+python -m src.experiments.plot_performance_panels --suite dmcontrol_state_stress --task hopper-hop
+python -m src.experiments.plot_performance_panels --suite dmcontrol_pixels --task walker-walk
+```
 
 ---
 
@@ -299,7 +357,7 @@ CTRO value coupling but differ in representational machinery:
 | Exp name | Stack | Losses | What it isolates |
 |----------|-------|--------|------------------|
 | `exp_baseline` | DMControl `ppo_mlp` (obs→MLP→V) / Procgen `ppo_impala` | plain PPO, \(\alpha=\beta=0\), no shared \(Z\) | No causal machinery at all. Critic-torso features are treated as \(Z\); \(\mu_{PL}\)/PR are expected to drift/stay unhealthy. |
-| `exp_latent_nolink` | Same as CTRO: DMControl `ctro_mlp` / Procgen `ctro_cnn_vae` (shared \(Z\), policy-on-\(Z\), Procgen keeps `vae_coef=0.1`) | CTRO agent with \(\alpha=0, \beta=0\) (no MICo/PL) | A causally-informed / reconstructible representation **without** the value link. Shows a good latent alone is insufficient. |
+| `exp_latent_nolink` | Same as CTRO: DMControl `ctro_mlp` / Procgen `ctro_cnn` (shared \(Z\), policy-on-\(Z\), `vae_coef=0`) | CTRO agent with \(\alpha=0, \beta=0\) (no MICo/PL) | A causally-informed representation **without** the value link. Shows a good latent alone is insufficient. |
 | `exp_ctro_mlp` (DMControl) / `exp_full` (Procgen) | CTRO stacks | \(\alpha,\beta > 0\) | Positive control: value link on. |
 
 Narrative across the three: (1) plain PPO has no shared-\(Z\)/value-link machinery → \(\mu_{PL}\)/PR
@@ -378,6 +436,8 @@ Per-task Panel A/B/C (BASELINE vs LATENT_NOLINK vs CTRO) via
 
 ```bash
 python -m src.experiments.plot_performance_panels --suite dmcontrol_state --task cheetah-run
+python -m src.experiments.plot_performance_panels --suite dmcontrol_state_shared --task cheetah-run
+python -m src.experiments.plot_performance_panels --suite dmcontrol_pixels --task cheetah-run
 python -m src.experiments.plot_performance_panels --suite procgen_easy --task coinrun
 ```
 
@@ -431,6 +491,9 @@ tail -f *.out  # View output files
 | DMControl PPO (`exp_baseline`) | MLP on obs | Feedforward MLP | PPO | Neg control 1: plain PPO, metrics on critic-torso features |
 | DMControl latent-no-link (`exp_latent_nolink`) | MLP on \(Z\) | MLP encoder + value head | PPO, \(\alpha=\beta=0\) | Neg control 2: shared causal \(Z\), no value link |
 | DMControl CTRO (`exp_ctro_mlp`) | MLP on \(Z\) | MLP encoder + value head | PPO + MICo + PL | Positive control: shared causal \(Z\), no VAE |
+| DMControl shared (`exp_shared_*`) | same as above at Optuna t8 HPs | same | matched parity | 8M×3 seeds; CTRO uses α/β warmup 500 |
+| DMControl stress (`exp_stress_*`) | policy-on-\(Z\) only | same | ent=0, lr↑, epochs↑ | Failure-regime hunt vs CTRO hold |
+| DMControl pixels (`exp_*` under `dmcontrol_pixels`) | Impala / latent Impala on RGB | CNN encoder or Impala V | PPO (+ MICo/PL for CTRO) | Same four tasks, 84×84, non-VAE `ctro_cnn` |
 
 ---
 

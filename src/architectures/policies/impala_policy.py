@@ -1,8 +1,7 @@
-"""Impala CNN policy for Procgen PPO baseline."""
+"""Impala CNN policy for Procgen / DMControl-pixel PPO baseline."""
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from src.architectures.encoders.impala_cnn import ProcgenImpalaEncoder
 
@@ -23,15 +22,18 @@ class ImpalaPolicy(nn.Module):
             self.action_head = nn.Linear(emb_size, action_dim)
         else:
             self.action_mean = nn.Linear(emb_size, action_dim)
-            self.action_log_std = nn.Linear(emb_size, action_dim)
+            # CleanRL: state-independent log std (one vector shared across states).
+            self.action_log_std = nn.Parameter(torch.zeros(1, action_dim))
+            nn.init.orthogonal_(self.action_mean.weight, gain=0.01)
+            nn.init.zeros_(self.action_mean.bias)
 
     def forward(self, obs: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         features = self.encoder(obs)
         if self.action_space_type == "discrete":
             return self.action_head(features)
         mean = self.action_mean(features)
-        log_std = self.action_log_std(features)
-        return mean, torch.clamp(log_std, min=-20, max=2)
+        log_std = self.action_log_std.expand_as(mean)
+        return mean, torch.clamp(log_std, min=-5.0, max=2.0)
 
     def get_action(self, obs: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         single = obs.dim() == 3
@@ -57,6 +59,10 @@ class ImpalaPolicy(nn.Module):
             logits = self.forward(obs)
             dist = torch.distributions.Categorical(logits=logits)
             return dist.log_prob(actions), dist.entropy()
+        if actions.dim() != 2:
+            raise ValueError(
+                f"continuous actions must be [batch, action_dim], got shape {tuple(actions.shape)}"
+            )
         mean, log_std = self.forward(obs)
         dist = torch.distributions.Normal(mean, torch.exp(log_std))
         return dist.log_prob(actions).sum(dim=-1), dist.entropy().sum(dim=-1)

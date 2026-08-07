@@ -90,10 +90,15 @@ class ProcgenVectorEnv:
         self.env.close()
 
 
-def _dmcontrol_worker(remote, domain: str, task_name: str, seed: int):
-    from src.environments.dmcontrol_wrapper import DMControlWrapper
+def _dmcontrol_worker(remote, domain: str, task_name: str, seed: int, pixels: bool):
+    if pixels:
+        from src.environments.dmcontrol_pixel_wrapper import DMControlPixelWrapper
 
-    env = DMControlWrapper(domain_name=domain, task_name=task_name, random_seed=seed)
+        env = DMControlPixelWrapper(domain_name=domain, task_name=task_name, random_seed=seed)
+    else:
+        from src.environments.dmcontrol_wrapper import DMControlWrapper
+
+        env = DMControlWrapper(domain_name=domain, task_name=task_name, random_seed=seed)
     obs, _ = env.reset()
     remote.send(obs.numpy())
     while True:
@@ -120,10 +125,16 @@ def _dmcontrol_worker(remote, domain: str, task_name: str, seed: int):
 class SubprocVectorEnv:
     """One DMControl env per worker process, stepped in lockstep across cores."""
 
-    def __init__(self, domain: str, task_name: str, num_envs: int, base_seed: int):
+    def __init__(
+        self,
+        domain: str,
+        task_name: str,
+        num_envs: int,
+        base_seed: int,
+        pixels: bool = False,
+    ):
         self.num_envs = num_envs
         self.action_space_type = "continuous"
-        self.obs_shape = None
 
         ctx = mp.get_context("spawn")
         self._remotes = []
@@ -132,7 +143,7 @@ class SubprocVectorEnv:
             parent, child = ctx.Pipe()
             proc = ctx.Process(
                 target=_dmcontrol_worker,
-                args=(child, domain, task_name, base_seed + i),
+                args=(child, domain, task_name, base_seed + i, pixels),
                 daemon=True,
             )
             proc.start()
@@ -141,8 +152,13 @@ class SubprocVectorEnv:
             self._procs.append(proc)
 
         self._initial_obs = np.stack([r.recv() for r in self._remotes], axis=0)
-        self.obs_dim = int(self._initial_obs.shape[1])
-        probe = DMControlProbe(domain, task_name)
+        if self._initial_obs.ndim == 2:
+            self.obs_shape = None
+            self.obs_dim = int(self._initial_obs.shape[1])
+        else:
+            self.obs_shape = tuple(self._initial_obs.shape[1:])
+            self.obs_dim = int(np.prod(self.obs_shape))
+        probe = DMControlProbe(domain, task_name, pixels=pixels)
         self.action_dim = probe.action_dim
 
     def reset(self) -> torch.Tensor:
@@ -179,10 +195,15 @@ class SubprocVectorEnv:
 class DMControlProbe:
     """Read action_dim without keeping a MuJoCo env alive in the main process."""
 
-    def __init__(self, domain: str, task_name: str):
-        from src.environments.dmcontrol_wrapper import DMControlWrapper
+    def __init__(self, domain: str, task_name: str, pixels: bool = False):
+        if pixels:
+            from src.environments.dmcontrol_pixel_wrapper import DMControlPixelWrapper
 
-        env = DMControlWrapper(domain_name=domain, task_name=task_name, random_seed=0)
+            env = DMControlPixelWrapper(domain_name=domain, task_name=task_name, random_seed=0)
+        else:
+            from src.environments.dmcontrol_wrapper import DMControlWrapper
+
+            env = DMControlWrapper(domain_name=domain, task_name=task_name, random_seed=0)
         self.action_dim = env.action_dim
         env.close()
 
@@ -198,5 +219,13 @@ def make_train_vec_env(suite_name: str, task: str, num_envs: int, base_seed: int
             start_level=0,
             num_envs=num_envs,
         )
+    if suite.env_type not in ("dmcontrol", "dmcontrol_pixels"):
+        raise ValueError(f"Unknown env_type for vec train: {suite.env_type}")
     domain, task_name = parse_dmcontrol_task(task)
-    return SubprocVectorEnv(domain, task_name, num_envs=num_envs, base_seed=base_seed)
+    return SubprocVectorEnv(
+        domain,
+        task_name,
+        num_envs=num_envs,
+        base_seed=base_seed,
+        pixels=suite.env_type == "dmcontrol_pixels",
+    )

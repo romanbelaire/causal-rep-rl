@@ -26,8 +26,11 @@ class CTRO(PPO):
     ):
         super().__init__(policy, critic, config, device, repr_net=repr_net)
 
+        # Target coefficients; effective values ramp via warmup_epochs (0 = always on).
         self.alpha = config.get("alpha", 0.0)
         self.beta = config.get("beta", 0.0)
+        self.alpha_warmup_epochs = int(config.get("alpha_warmup_epochs", 0))
+        self.beta_warmup_epochs = int(config.get("beta_warmup_epochs", 0))
         self.mu_0 = config.get("mu_0", 0.1)
         self.beta_mico = config.get("beta_mico", 0.1)
         self.pl_eps = config.get("pl_eps", 1e-4)
@@ -50,8 +53,17 @@ class CTRO(PPO):
             embed_ball_radius=self.mico_embed_ball_radius,
         )
 
+    @staticmethod
+    def _warmup_scale(warmup_epochs: int, training_epoch: int | None) -> float:
+        if warmup_epochs <= 0:
+            return 1.0
+        if training_epoch is None:
+            raise ValueError("training_epoch required when alpha/beta warmup_epochs > 0")
+        return min(1.0, float(training_epoch) / float(warmup_epochs))
+
     @property
     def needs_transition_batch(self) -> bool:
+        # Use target coeffs so transition batches are available once warmup engages.
         return self.alpha > 0 or self.beta > 0
 
     def _extra_critic_terms(
@@ -63,11 +75,16 @@ class CTRO(PPO):
     ) -> tuple[torch.Tensor, dict]:
         extra = torch.tensor(0.0, device=self.device)
         stats: dict[str, float] = {}
+        epoch = self._training_epoch
+        alpha_eff = self.alpha * self._warmup_scale(self.alpha_warmup_epochs, epoch)
+        beta_eff = self.beta * self._warmup_scale(self.beta_warmup_epochs, epoch)
+        stats["alpha_eff"] = alpha_eff
+        stats["beta_eff"] = beta_eff
 
         if batch_rewards is not None:
             stats["reward_dispersion"] = reward_dispersion(batch_rewards)
 
-        if self.alpha > 0:
+        if alpha_eff > 0:
             mico_raw, mico_stats = compute_mico_loss(
                 self.critic,
                 self.encoder_target,
@@ -80,10 +97,10 @@ class CTRO(PPO):
                 embed_ball_radius=self.mico_embed_ball_radius,
                 repr_net=self.repr_net,
             )
-            extra = extra + self.alpha * mico_raw
+            extra = extra + alpha_eff * mico_raw
             stats.update(mico_stats)
 
-        if self.beta > 0:
+        if beta_eff > 0:
             pl_raw, pl_stats = compute_pl_coupling_loss(
                 self.critic,
                 z,
@@ -93,7 +110,7 @@ class CTRO(PPO):
                 mu_0=self.mu_0,
                 eps=self.pl_eps,
             )
-            extra = extra + self.beta * pl_raw
+            extra = extra + beta_eff * pl_raw
             stats.update(pl_stats)
 
         return extra, stats

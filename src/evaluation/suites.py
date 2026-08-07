@@ -12,6 +12,9 @@ Procgen (easy, 25M steps):
 
 DMControl (state observations):
   Full eval uses random seeds [0, n); test eval uses seeds [seed_offset, seed_offset + n).
+
+DMControl (pixel observations):
+  Same tasks and seed offsets as state; obs are 84x84 RGB renders.
 """
 
 from dataclasses import dataclass
@@ -95,9 +98,26 @@ DMCONTROL_STATE_SUITE = EvalSuite(
     ),
 )
 
+DMCONTROL_PIXELS_SUITE = EvalSuite(
+    name="dmcontrol_pixels",
+    env_type="dmcontrol_pixels",
+    tasks=DMCONTROL_STATE_TASKS,
+    distributions=(
+        DistributionSpec(
+            name="full",
+            dmcontrol_seed_offset=0,
+        ),
+        DistributionSpec(
+            name="test",
+            dmcontrol_seed_offset=10_000,
+        ),
+    ),
+)
+
 EVAL_SUITES: dict[str, EvalSuite] = {
     PROCGEN_EASY_SUITE.name: PROCGEN_EASY_SUITE,
     DMCONTROL_STATE_SUITE.name: DMCONTROL_STATE_SUITE,
+    DMCONTROL_PIXELS_SUITE.name: DMCONTROL_PIXELS_SUITE,
 }
 
 

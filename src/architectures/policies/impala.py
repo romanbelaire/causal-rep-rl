@@ -54,7 +54,10 @@ class IMPALAPolicy(nn.Module):
             self.action_head = nn.Linear(hidden_sizes[0], action_dim)
         else:
             self.action_mean = nn.Linear(hidden_sizes[0], action_dim)
-            self.action_log_std = nn.Linear(hidden_sizes[0], action_dim)
+            # CleanRL: state-independent log std (one vector shared across states).
+            self.action_log_std = nn.Parameter(torch.zeros(1, action_dim))
+            nn.init.orthogonal_(self.action_mean.weight, gain=0.01)
+            nn.init.zeros_(self.action_mean.bias)
     
     def forward(self, obs: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Forward pass."""
@@ -69,13 +72,14 @@ class IMPALAPolicy(nn.Module):
             return logits
         else:
             mean = self.action_mean(x)
-            log_std = self.action_log_std(x)
-            log_std = torch.clamp(log_std, min=-20, max=2)
+            log_std = self.action_log_std.expand_as(mean)
+            log_std = torch.clamp(log_std, min=-5.0, max=2.0)
             return mean, log_std
     
     def get_action(self, obs: torch.Tensor, deterministic: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """Sample action from policy."""
-        if obs.dim() == 1:
+        squeeze_batch = obs.dim() == 1
+        if squeeze_batch:
             obs = obs.unsqueeze(0)
         
         if self.action_space_type == "discrete":
@@ -88,12 +92,6 @@ class IMPALAPolicy(nn.Module):
                 action = dist.sample()
             
             log_prob = dist.log_prob(action)
-            
-            if obs.dim() == 1:
-                action = action.squeeze(0)
-                log_prob = log_prob.squeeze(0)
-            
-            return action, log_prob
         else:
             mean, log_std = self.forward(obs)
             std = torch.exp(log_std)
@@ -104,13 +102,13 @@ class IMPALAPolicy(nn.Module):
             else:
                 action = dist.sample()
             
-            log_prob = dist.log_prob(action).sum(dim=-1, keepdim=True)
-            
-            if obs.dim() == 1:
-                action = action.squeeze(0)
-                log_prob = log_prob.squeeze(0)
-            
-            return action, log_prob
+            log_prob = dist.log_prob(action).sum(dim=-1)
+
+        if squeeze_batch:
+            action = action.squeeze(0)
+            log_prob = log_prob.squeeze(0)
+
+        return action, log_prob
     
     def evaluate_actions(self, obs: torch.Tensor, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Evaluate actions under current policy."""
@@ -120,6 +118,10 @@ class IMPALAPolicy(nn.Module):
             log_probs = dist.log_prob(actions)
             entropy = dist.entropy()
         else:
+            if actions.dim() != 2:
+                raise ValueError(
+                    f"continuous actions must be [batch, action_dim], got shape {tuple(actions.shape)}"
+                )
             mean, log_std = self.forward(obs)
             std = torch.exp(log_std)
             dist = torch.distributions.Normal(mean, std)

@@ -209,4 +209,26 @@ PERFORMANCE_SUITE_CONFIG = {
         "ctro_algo": DMCONTROL_CTRO_ALGO_CONFIG,
         "results_prefix": "dmcontrol_state",
     },
+    "dmcontrol_pixels": {
+        "arch": PROCGEN_ARCH_CONFIG,
+        "training": DMCONTROL_TRAINING_CONFIG,
+        "ppo_algo": {
+            **DMCONTROL_PPO_ALGO_CONFIG,
+            "learning_rate": 1.0128e-4,
+            "entropy_coef": 0.0408,
+            "num_epochs": 20,
+        },
+        "ctro_algo": {
+            **DMCONTROL_CTRO_ALGO_CONFIG,
+            "learning_rate": 1.0128e-4,
+            "entropy_coef": 0.0408,
+            "num_epochs": 20,
+            "vae_coef": 0.0,
+            "alpha": 0.00205,
+            "beta": 0.532,
+            "alpha_warmup_epochs": 500,
+            "beta_warmup_epochs": 500,
+        },
+        "results_prefix": "dmcontrol_pixels",
+    },
 }
