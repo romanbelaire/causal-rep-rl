@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-ALLOWED_OBS_NORM = frozenset({"running_mean_std"})
-ALLOWED_REWARD_NORM = frozenset({"return_var_scale"})
+ALLOWED_OBS_NORM = frozenset({"running_mean_std", "none"})
+ALLOWED_REWARD_NORM = frozenset({"return_var_scale", "none"})
 
 
 class RunningMeanStd:
@@ -132,7 +132,9 @@ class PerformanceNormalizer:
 
     Modes (fail fast on unknown):
       obs_norm="running_mean_std"  — (x-mean)/std with ±obs_norm_clip
+      obs_norm="none"              — identity (ALE /255 inside NatureCNN)
       reward_norm_mode="return_var_scale" — CleanRL return-std scale, no reward clip
+      reward_norm_mode="none"      — identity (ALE sign-clipped rewards)
     """
 
     def __init__(
@@ -157,28 +159,41 @@ class PerformanceNormalizer:
         self.reward_norm = RewardNormalizer(gamma)
 
     def observe(self, obs: torch.Tensor) -> torch.Tensor:
+        if self.obs_norm == "none":
+            return obs
         self.obs_rms.update(obs.detach().cpu().numpy())
         return self.obs_rms.normalize(obs, clip=self.obs_norm_clip)
 
     def normalize_obs(self, obs: torch.Tensor) -> torch.Tensor:
         """Z-score without updating running stats (e.g. next_obs in vec rollouts)."""
+        if self.obs_norm == "none":
+            return obs
         return self.obs_rms.normalize(obs, clip=self.obs_norm_clip)
 
     def reward(self, reward: float, done: bool) -> float:
+        if self.reward_norm_mode == "none":
+            return float(reward)
         return self.reward_norm.normalize(reward, done)
 
     def state_dict(self) -> dict:
-        return {
+        out = {
             "obs_norm": self.obs_norm,
             "obs_norm_clip": self.obs_norm_clip,
             "reward_norm_mode": self.reward_norm_mode,
-            "obs_rms": self.obs_rms.state_dict(),
             "reward_norm": self.reward_norm.state_dict(),
         }
+        if self.obs_norm == "none":
+            out["obs_rms"] = {"shape": list(self.obs_rms.shape), "skipped": True}
+        else:
+            out["obs_rms"] = self.obs_rms.state_dict()
+        return out
 
     @classmethod
     def from_state_dict(cls, state: dict) -> PerformanceNormalizer:
-        obs_shape = tuple(state["obs_rms"]["shape"])
+        if state.get("obs_rms", {}).get("skipped"):
+            obs_shape = tuple(state["obs_rms"]["shape"])
+        else:
+            obs_shape = tuple(state["obs_rms"]["shape"])
         gamma = state["reward_norm"]["gamma"]
         obj = cls(
             obs_shape,
@@ -187,6 +202,7 @@ class PerformanceNormalizer:
             obs_norm_clip=float(state.get("obs_norm_clip", 10.0)),
             reward_norm_mode=state.get("reward_norm_mode", "return_var_scale"),
         )
-        obj.obs_rms = RunningMeanStd.from_state_dict(state["obs_rms"])
+        if not state.get("obs_rms", {}).get("skipped"):
+            obj.obs_rms = RunningMeanStd.from_state_dict(state["obs_rms"])
         obj.reward_norm = RewardNormalizer.from_state_dict(state["reward_norm"])
         return obj

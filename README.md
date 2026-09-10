@@ -1,126 +1,98 @@
-# Causal RL Representation: Bounding Chain Experiments
+# Causal-rep-rl: active self-supervised CTRO
 
-This repository implements experiments for testing the bounding chain from policy KL to causal representation error via gradient and convexity measures in reinforcement learning.
+Learn an **approximate action-conditioned control abstraction** on the reachable
+support of a discrete-action training environment. The agent collects action
+experiments, trains an action-value ensemble from replay, uses same-action
+MICo-style targets to test latent mergers, and keeps a Polyak–Łojasiewicz (PL)
+hinge as a separate value-landscape admissibility condition.
+
+Do not read this as recovery of a unique causal graph, individual
+counterfactuals, or robustness to arbitrary external shifts.
+
+## Live recipes
+
+| Preset | Agent | What it is |
+|---|---|---|
+| vanilla PPO (E0 lock) | `PPO` | Clipped PPO, no PL, no MICo, no replay |
+| `anti_aliased_ppo` (E0 lock) | `CTRO` | PPO + scale-corrected PL hinge on a frozen probe batch |
+| `active_ctro` | `ActiveCTRO` | Dual-stream collection, replay, Q ensemble, action-conditioned MICo, optional query `U`, relational geometry |
+| `ctro_full_legacy` | `CTRO` | Recoverable rejected stack (random-pair MICo + PL) |
+
+PL and action-conditioned MICo share the encoder and are **not** substitutes.
+PL is the anti-aliased-PPO admissibility condition on \(V(Z)\). Action-conditioned
+MICo is a sampled same-action reward-test surrogate, not exact bisimulation.
+
+## Setup
+
+Bridges-2: load the project env, do not install torch on `/jet/home`.
+
+```bash
+module load pytorch/26.05-2.11-py3
+source /ocean/projects/cis260223p/rbelaire/envs/causal-rep/bin/activate
+cd /jet/home/rbelaire/causal-rep-rl
+```
+
+## First commands
+
+Vanilla PPO E0 (MiniGrid Unlock):
+
+```bash
+python -m src.experiments.exp_e0_vanilla --seed 42 --device cpu
+```
+
+Anti-aliased PPO E0:
+
+```bash
+python -m src.experiments.exp_e0_aa_ppo --seed 42 --device cpu
+```
+
+Active CTRO on MiniGrid (new architecture; GPU node for a full run):
+
+```bash
+python -m src.experiments.exp_active_ctro --seed 42
+```
+
+CPU toys (action alias, nuisance, coverage, KL-null):
+
+```bash
+CUDA_VISIBLE_DEVICES= python -m src.experiments.run_active_ctro_toys
+```
+
+Bridges-2 pipeline (toys → MiniGrid GPU → aggregate):
+
+```bash
+bash src/experiments/jobs/submit_active_ctro.sh
+```
+
+DeepMind Control / Procgen performance training is unchanged:
+
+```bash
+python -m src.experiments.run_performance_train \
+  --suite dmcontrol_state --task cartpole-swingup --seed 42 \
+  --exp-name exp_anti_aliased_ppo --agent ctro \
+  --algo-preset anti_aliased_ppo
+```
 
 ## Documentation
 
-- **[NEW_SPEC.md](NEW_SPEC.md)**: Experimental specification and requirements
-- **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)**: Detailed implementation plan with phases, TODOs, and technical decisions
+- [`docs/active_control_abstraction.md`](docs/active_control_abstraction.md) — v1 claim and role split
+- [`docs/replay_and_offpolicy_semantics.md`](docs/replay_and_offpolicy_semantics.md)
+- [`docs/action_conditioned_mico.md`](docs/action_conditioned_mico.md)
+- [`docs/relational_trust_region.md`](docs/relational_trust_region.md)
+- [`docs/experiment_protocol.md`](docs/experiment_protocol.md)
+- [`docs/research_claims_and_limitations.md`](docs/research_claims_and_limitations.md)
+- [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — staged sequence
+- [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md)
+- [`EXPERIMENTS.md`](EXPERIMENTS.md) — E0–E7
+- [`docs/METHOD_CHANGELOG.md`](docs/METHOD_CHANGELOG.md) — recoverability of prior recipes
+- [`NOTES.md`](NOTES.md) — experiment log
 
-## Project Status
+## Claims that this repo must not make
 
-🚧 **In Planning Phase** - Implementation plan created, awaiting review and TODO completion.
-
-## Quick Start
-
-### Installation
-
-1. Create a virtual environment (Python 3.10):
-```bash
-python3.10 -m venv rl-venv
-source rl-venv/bin/activate
-```
-
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-3. Install gym-minigrid:
-```bash
-pip install gym-minigrid
-```
-
-### Running Experiments
-
-Train a baseline PPO agent on Minigrid:
-
-```bash
-python scripts/train_baseline.py --config configs/minigrid_config.json
-```
-
-Or use the main training script directly:
-
-```bash
-python -m src.main --config configs/minigrid_config.json
-```
-
-### Configuration
-
-Experiments are configured via JSON files in `configs/`. See `configs/minigrid_config.json` for an example.
-
-Key configuration sections:
-- `experiment`: Experiment name, seed, device
-- `environment`: Environment name and task
-- `architecture`: Policy and critic network architectures
-- `algorithm`: Training algorithm hyperparameters
-- `training`: Training duration, checkpointing, evaluation
-- `metrics`: Which metrics to collect
-- `logging`: Logging directory and settings
-
-### Experiment Storage
-
-Experiments are stored in `{log_dir}/{environment}/{policy_type}_{critic_type}/`:
-- `weights_latest.pt`: Latest checkpoint (overwritten)
-- `weights_final.pt`: Final checkpoint
-- `{experiment_name}_metrics.csv`: Training metrics
-- `{experiment_name}_config.json`: Experiment configuration
-
-## Project Structure
-
-```
-causal-rep/
-├── src/                    # Main source code
-│   ├── architectures/      # Critic and policy architectures
-│   ├── environments/       # Environment wrappers
-│   ├── algorithms/         # Training algorithms (TRPO, PPO, etc.)
-│   ├── metrics/            # Metric collection implementations
-│   └── utils/              # Utilities and helpers
-├── configs/                # Configuration files (YAML)
-├── scripts/                # Training and analysis scripts
-├── tests/                  # Unit and integration tests
-└── slurm_template.sh       # SLURM job template
-```
-
-## Requirements
-
-**TODO**: See `requirements.txt` (to be created) and `IMPLEMENTATION_PLAN.md` Phase 0.2.
-
-## Environments
-
-- **Procgen**: Procedurally-generated tasks
-- **MuJoCo**: Continuous control (Ant, Hopper, Walker2d, HalfCheetah)
-- **Minigrid**: Gridworld navigation tasks
-- **DMControl**: (Optional) Additional continuous control
-
-## Architectures
-
-### Critics
-- ICNN (Input Convex Neural Network)
-- Simple Feedforward NN
-- VAE-based Critic
-
-### Policies
-- IMPALA
-- Standard MLP Policy
-
-## Metrics
-
-All experiments collect:
-- Sampled Hessian spectrum
-- Fisher information index
-- KL divergence
-- Gradient magnitude
-- Value gradient difference
-- Causal prediction error
-- Final policy regret
-- Occupancy measure stability
-
-## Contributing
-
-This is a research codebase. Code must fail fast and loudly - always raise errors, never silently handle failures.
-
-## References
-
-See NEW_SPEC.md Section 6 for full references.
-
+1. Action-conditioned MICo is a sampled surrogate, not exact bisimulation.
+2. v1 uses future rewards; selected predictive features are deferred.
+3. The target is reachable-support control sufficiency, not causal-factor recovery.
+4. Action randomization supplies action interventions, not external-shift invariance.
+5. Batch \(\widehat D_{Z,\infty}^B\) is not population \(D_{Z,\infty}\).
+6. Policy KL has latent null directions; PL is a critic-landscape property, not pairwise anti-aliasing.
+7. No sup-norm critic-drift result establishes moving-critic PL stability.

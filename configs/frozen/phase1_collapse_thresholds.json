@@ -1,0 +1,41 @@
+{
+  "phase": 1,
+  "environment": {
+    "suite": "dmcontrol_pixels",
+    "task": "cartpole-swingup"
+  },
+  "healthy_reference": {
+    "exp_name_pattern": "exp_p1v2_ppo_ep4",
+    "seeds": [
+      42,
+      43,
+      44,
+      45,
+      46
+    ],
+    "window": "final_20pct_eval_checkpoints",
+    "note": "Standard-epoch PPO development runs (4 epochs per rollout). Thresholds are filled only from these runs before inspecting higher-epoch stress returns."
+  },
+  "rules_predeclared_before_stress_inspection": {
+    "functional_probe_high": "functional_probe_mse > healthy_mean + 2 * healthy_std",
+    "C_0p01_high": "diag_dz_C_0p01 > max(0.10, healthy_95th_percentile)",
+    "dormant_high": "diag_dormant_unit_frac > healthy_mean + 2 * healthy_std",
+    "geometry_high": "C_0p01_high OR dormant_high",
+    "collapse": "functional_probe_high AND geometry_high for two consecutive evaluation checkpoints",
+    "return_not_used": true
+  },
+  "thresholds": {
+    "functional_probe_mse_mean": 0.11062347491582232,
+    "functional_probe_mse_std": 0.04623859787783281,
+    "functional_probe_mse_threshold": 0.20310067067148796,
+    "diag_dz_C_0p01_p95": 0.032421874999999996,
+    "diag_dz_C_0p01_threshold": 0.1,
+    "diag_dormant_unit_frac_mean": 0.06276041666666667,
+    "diag_dormant_unit_frac_std": 0.12399732717513463,
+    "diag_dormant_unit_frac_threshold": 0.31075507101693595,
+    "n_late_rows": 15,
+    "healthy_exp": "exp_p1v2_ppo_ep4"
+  },
+  "thresholds_status": "fitted",
+  "fit_script": "python -m src.experiments.fit_phase1_collapse_thresholds"
+}

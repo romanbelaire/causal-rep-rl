@@ -219,6 +219,10 @@ def make_train_vec_env(suite_name: str, task: str, num_envs: int, base_seed: int
             start_level=0,
             num_envs=num_envs,
         )
+    if suite.env_type == "ale":
+        from src.environments.ale_wrapper import ALEVectorEnv
+
+        return ALEVectorEnv(env_id=task, num_envs=num_envs, base_seed=base_seed)
     if suite.env_type not in ("dmcontrol", "dmcontrol_pixels"):
         raise ValueError(f"Unknown env_type for vec train: {suite.env_type}")
     domain, task_name = parse_dmcontrol_task(task)

@@ -1,0 +1,145 @@
+{
+  "freeze_id": "ltro_phase0_v1",
+  "git_tag": "ltro-phase0-v1",
+  "eta_selection_status": "fixed_penalty_fallback",
+  "code_commit": "ltro-phase0-v1",
+  "suite": "dmcontrol_pixels",
+  "task_reference": "cartpole-swingup",
+  "total_steps_phase0": 1500000,
+  "algorithm": {
+    "learning_rate": 0.00010128,
+    "value_coef": 0.5,
+    "entropy_coef": 0.0408,
+    "vae_coef": 0.0,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_epsilon": 0.2,
+    "use_policy_clip": true,
+    "max_grad_norm": 0.5,
+    "batch_size": 256,
+    "num_epochs": 20,
+    "mu_0": 0.1,
+    "beta_mico": 0.1,
+    "pl_eps": 0.0001,
+    "f_floor": 0.001,
+    "tau_ref": 0.01,
+    "v_ref_quantile": 0.99,
+    "mico_huber_delta": 1.0,
+    "mico_target_update_tau": 0.005,
+    "dz_enabled": true,
+    "lambda_dz": 1.0,
+    "eta_dz": 0.14,
+    "dz_adapt": false,
+    "dz_eta_adapt": false,
+    "eta_dz_min": null,
+    "eta_dz_c": 1.5,
+    "dz_ema_tau": 0.05,
+    "dz_ema_init": 0.5,
+    "lambda_loc": 0.7,
+    "dz_delta": 0.01,
+    "dz_collapse_target_thresh": 0.1,
+    "dz_n_pairs": 2048,
+    "ref_buffer_size": 2048,
+    "ref_refresh_factor": 2.0,
+    "head_phasing": false,
+    "enc_epochs": 4,
+    "val_epochs": 4,
+    "pl_scale_invariant": false,
+    "pl_value_normalize": false,
+    "pl_f_mode": "exclude",
+    "pl_on_ref_buffer": false,
+    "pl_f_min": 0.001,
+    "value_spectral_norm": false,
+    "actor_updates_encoder": true,
+    "target_kl": null,
+    "alpha": 0.00205,
+    "beta": 0.532,
+    "alpha_warmup_epochs": 500,
+    "beta_warmup_epochs": 500
+  },
+  "architecture": {
+    "mode": "cnn",
+    "cnn": {
+      "depths": [
+        16,
+        32,
+        32
+      ],
+      "emb_size": 256
+    },
+    "critic": {
+      "type": "encoder",
+      "latent_dim": 128,
+      "encoder_hidden": [
+        256,
+        256
+      ],
+      "decoder_hidden": [
+        256,
+        256
+      ],
+      "value_hidden": [
+        128,
+        128
+      ],
+      "activation": "gelu",
+      "beta": 1.0
+    },
+    "policy": {
+      "type": "impala",
+      "hidden_sizes": [
+        128,
+        128
+      ],
+      "activation": "gelu",
+      "num_residual_blocks": 2
+    }
+  },
+  "training": {
+    "buffer_size": 2048,
+    "eval_frequency": 50,
+    "eval_episodes": 10,
+    "eval_deterministic": true,
+    "num_envs": 1,
+    "obs_norm": "running_mean_std",
+    "obs_norm_clip": 10.0,
+    "reward_norm": "return_var_scale",
+    "metric_pl_max_samples": null,
+    "collapse_min_steps": 200000,
+    "collapse_streak": 3,
+    "early_stop_enabled": false
+  },
+  "dz_definition": {
+    "form": "reference_scaled_log_distance",
+    "delta": 0.01,
+    "s_ref_rule": "median ||zi-zj|| / sqrt(d) on initial/declared healthy reference encoder; frozen for run",
+    "pairs": "same indices for old and new; old detached; near-zero and duplicates retained"
+  },
+  "loss_term": {
+    "form": "lambda_dz * (D_Z - eta_dz**2)",
+    "hinged": false,
+    "fixed_lambda_implication": "With lambda_dz=1 frozen, -eta_dz**2 is constant and has no gradient. Training optimizes L_CTRO + D_Z. eta_dz=0.14 is a monitoring threshold for D_Z/eta^2 logs only."
+  },
+  "dual_controller": {
+    "adaptive_lambda": false,
+    "lambda_lo": 0.0001,
+    "lambda_hi": 10000.0,
+    "update_rule": "disabled under this freeze (dz_adapt=false); dual rule remains in code for non-frozen experiments"
+  },
+  "notes": "LTRO-fixed: geometry penalty coefficient lambda=1; eta=0.14 monitoring only (not a hinge). Adaptive dual rejected: no dual radius passed P0.3 on cartpole-pixels (see docs/phase0_freeze_note.md).",
+  "selection": {
+    "mode": "fixed_penalty",
+    "arm": "penalty",
+    "eta": 0.14,
+    "eta_role": "monitoring_threshold_only",
+    "lambda_dz": 1.0,
+    "dz_adapt": false,
+    "reason": "no dual radius satisfied P0.3; Experiment-guide fallback to fixed penalty",
+    "job_radius": 44194678
+  },
+  "freeze_note": "docs/phase0_freeze_note.md",
+  "environment_lock": {
+    "requirements": "requirements.txt",
+    "bridges_env": "/ocean/projects/cis260223p/rbelaire/envs/causal-rep"
+  }
+}

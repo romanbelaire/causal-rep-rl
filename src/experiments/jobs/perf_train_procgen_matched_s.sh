@@ -12,6 +12,7 @@
 #SBATCH -e logs/%x_%a.%j.err
 #SBATCH --array=0-23%8
 # 24 tasks (8 games x 3 seeds). EXP_NAME / EXTRA_ARGS via --export.
+# Suite default num_envs=64 (Procgen C-batched); ~12h/run historically under 1-day wall.
 #SBATCH --requeue
 
 REPO=/ocean/projects/cis260223p/rbelaire/causal-rep-rl

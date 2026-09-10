@@ -25,6 +25,7 @@ python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available';
 
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
+export MUJOCO_GL=egl
 
 SEEDS=(42 43 44)
 SEED=${SEEDS[$SLURM_ARRAY_TASK_ID]}

@@ -1,0 +1,6 @@
+Negative-control comparison — cartpole-swingup
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE             27.8051 ± 27.7658       592.6375     2.0683
+LATENT_NOLINK        334.9706 ± 19.1578        24.3198     4.1368
+CTRO                 512.8135 ± 171.2823      1096.0349     3.4304

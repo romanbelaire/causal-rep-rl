@@ -114,10 +114,27 @@ DMCONTROL_PIXELS_SUITE = EvalSuite(
     ),
 )
 
+ALE_TASKS: tuple[str, ...] = (
+    "ALE/Phoenix-v5",
+    "ALE/NameThisGame-v5",
+)
+
+ALE_SUITE = EvalSuite(
+    name="ale",
+    env_type="ale",
+    tasks=ALE_TASKS,
+    training_steps=100_000_000,
+    eval_episodes=10,
+    distributions=(
+        DistributionSpec(name="full"),
+    ),
+)
+
 EVAL_SUITES: dict[str, EvalSuite] = {
     PROCGEN_EASY_SUITE.name: PROCGEN_EASY_SUITE,
     DMCONTROL_STATE_SUITE.name: DMCONTROL_STATE_SUITE,
     DMCONTROL_PIXELS_SUITE.name: DMCONTROL_PIXELS_SUITE,
+    ALE_SUITE.name: ALE_SUITE,
 }
 
 

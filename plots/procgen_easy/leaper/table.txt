@@ -1,0 +1,6 @@
+Negative-control comparison — leaper
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE              4.1044 ± 0.2687         0.1320     1.2811
+LATENT_NOLINK         2.9716 ± 0.5484         0.0001     1.3520
+CTRO                  3.1039 ± 0.2790       474.7227     1.7510

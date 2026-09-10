@@ -61,6 +61,11 @@ def make_env(
             task_name=task_name,
             random_seed=distribution.dmcontrol_seed_offset,
         )
+    if suite.env_type == "ale":
+        from src.environments.ale_wrapper import ALEWrapper
+
+        seed = 0 if distribution.dmcontrol_seed_offset is None else distribution.dmcontrol_seed_offset
+        return ALEWrapper(env_id=task, seed=seed)
     raise ValueError(f"Unknown env_type: {suite.env_type}")
 
 

@@ -1,0 +1,6 @@
+Negative-control comparison — fruitbot
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE             13.2421 ± 2.4099         0.0521     1.3931
+LATENT_NOLINK        10.2278 ± 6.2907         0.0041    49.8829
+CTRO                 12.9575 ± 0.7538        37.5145    27.6193

@@ -1,54 +1,39 @@
 #!/bin/bash
-
-#################################################
-## VANILLA PPO BASELINE: IMPALA + MLP CRITIC  ##
-#################################################
-## ALL SBATCH COMMANDS WILL START WITH #SBATCH ##
-## DO NOT REMOVE THE # SYMBOL                  ## 
-#################################################
-
-#SBATCH --nodes=1
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:1
-#SBATCH --mem=200gb
-#SBATCH --time=02-0:00:0
-##SBATCH --constraint=l40|l40s|a100|a40
+#SBATCH -N 1
+#SBATCH -p GPU-small
+#SBATCH -t 08:00:00
+#SBATCH --gpus=v100-32:1
+#SBATCH -A cis260223p
 #SBATCH --mail-type=END
-#SBATCH --output=%u.vanilla_ppo_impala_mlp.%j.out
+#SBATCH --mail-user=rbelaire@andrew.cmu.edu
+#SBATCH --job-name=vanilla-ppo-impala-mlp-e8
+#SBATCH -o logs/%x_%a.%j.out
+#SBATCH -e logs/%x_%a.%j.err
+#SBATCH --array=0-2
 #SBATCH --requeue
 
-#SBATCH --partition=researchshort
-#SBATCH --account=pradeepresearch 
-#SBATCH --qos=research-1-qos
-#SBATCH --mail-user=rbelaire.2021@phdcs.smu.edu.sg
-#SBATCH --job-name=vanilla-ppo-impala-mlp
+REPO=/ocean/projects/cis260223p/rbelaire/causal-rep-rl
+cd "$REPO" || exit 1
+mkdir -p logs results/slurm
 
-module purge
-module load Python/3.10.16-GCCcore-13.3.0
-module load CUDA/12.6.0 cuDNN/9.5.0.50-CUDA-12.6.0 OpenMPI/5.0.3-GCC-13.3.0
+# PyTorch + deps: Ocean conda env (Python 3.10)
+export PATH=/ocean/projects/cis260223p/rbelaire/envs/causal-rep/bin:$PATH
 
-export NVCC_FLAGS="-allow-unsupported-compiler"
-
-# Change to script directory (project root)
-cd /common/home/users/r/rbelaire.2021/causal-rep || exit 1
-
-source rl-venv/bin/activate
-
-export CPLUS_INCLUDE_PATH=$CPLUS_INCLUDE_PATH:~/LLM/llm/include/python3.10:/opt/apps/software/Python/3.10.16-GCCcore-13.3.0/include/python3.10
-export LIBRARY_PATH=$LIBRARY_PATH:~/LLM/llm/lib:/opt/apps/software/Python/3.10.16-GCCcore-13.3.0/lib
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/apps/software/Python/3.10.16-GCCcore-13.3.0/lib
-
-export DS_BUILD_OPS=0
-export DS_BUILD_CPU_ADAM=0
-export DS_BUILD_FUSED_ADAM=0
-export DS_BUILD_UTILS=0
-export DS_BUILD_AIO=0
-
+module load cuda/12.6.1
 nvidia-smi
-nvcc --version
+python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print('cuda_device:', torch.cuda.get_device_name(0))"
 
-PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
+export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
 
-# Run training
-srun --gres=gpu:1 python -m src.main --config configs/exp1_vanilla_ppo_impala_mlp.json
-
+CONFIGS=("configs/exp1_vanilla_ppo_impala_mlp.json")
+SEEDS=(42 43 44)
+i=$SLURM_ARRAY_TASK_ID
+CFG=${CONFIGS[$((i / 3))]}
+SEED=${SEEDS[$((i % 3))]}
+if [ -f src/main.py ]; then
+  python -m src.main --config "$CFG" --seed "$SEED"
+else
+  echo "src.main missing; use src/experiments/jobs/*.sh for live CTRO experiments" >&2
+  exit 1
+fi

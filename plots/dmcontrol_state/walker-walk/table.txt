@@ -1,0 +1,6 @@
+Negative-control comparison — walker-walk
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE             33.3567 ± 4.2868        44.0443     1.1638
+LATENT_NOLINK        174.0518 ± 51.9403         2.1979     7.4805
+CTRO                 155.0939 ± 27.4116        35.5044     9.0830

@@ -1,2 +1,2 @@
-outputs/** filter=lfs diff=lfs merge=lfs -text
-results/** filter=lfs diff=lfs merge=lfs -text
+# Do not put experiment artifacts or checkpoints in Git or Git LFS.
+# results/, outputs/, *.pt, *.pth, *.ckpt are ignored in .gitignore.

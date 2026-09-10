@@ -1,0 +1,6 @@
+Negative-control comparison — hopper-hop
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE              0.0250 ± 0.0009      8819.1025     1.0341
+LATENT_NOLINK         0.3665 ± 0.3397       346.2456     2.8323
+CTRO                  0.7994 ± 0.2152      3394.1547     3.1047

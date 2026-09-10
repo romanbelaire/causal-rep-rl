@@ -140,6 +140,28 @@ def _create_mlp_latent_policy(
     ).to(device)
 
 
+def _nature_stack(
+    obs_shape: tuple[int, int, int],
+    action_dim: int,
+    device: str,
+    is_ctro: bool,
+) -> PerformanceStack:
+    from src.architectures.critics.nature_value_critic import NatureValueCritic
+    from src.architectures.policies.nature_policy import NaturePolicy
+
+    if action_dim < 1:
+        raise ValueError(f"NatureCNN requires discrete action_dim >= 1, got {action_dim}")
+    policy = NaturePolicy(obs_shape, action_dim).to(device)
+    critic = NatureValueCritic(obs_shape).to(device)
+    return PerformanceStack(
+        policy=policy,
+        critic=critic,
+        policy_on_latent=False,
+        pixel_obs=True,
+        stack_type="ctro_nature" if is_ctro else "ppo_nature",
+    )
+
+
 def build_performance_stack(
     arch_cfg: dict,
     env,
@@ -153,6 +175,8 @@ def build_performance_stack(
 
     if pixel_obs:
         obs_shape = tuple(env.obs_shape)
+        if arch_cfg.get("mode") == "nature_cnn" or arch_cfg.get("cnn_family") == "nature":
+            return _nature_stack(obs_shape, env.action_dim, device, is_ctro)
         cnn = arch_cfg.get("cnn", {})
         emb_size = cnn.get("emb_size", 256)
         depths = tuple(cnn.get("depths", [16, 32, 32]))
@@ -198,16 +222,19 @@ def build_performance_stack(
             stack_type="ctro_mlp",
         )
 
+    # CleanRL state PPO: actor and critic both use baseline_hidden (default [64, 64]).
+    baseline_hidden = arch_cfg.get("baseline_hidden", p.get("hidden_sizes", [64, 64]))
+    act = p.get("activation", "tanh")
     critic = FeedforwardCritic(
         env.obs_dim,
-        hidden_sizes=p.get("hidden_sizes", [256, 256]),
-        activation=p.get("activation", "tanh"),
+        hidden_sizes=list(baseline_hidden),
+        activation=act,
     ).to(device)
     policy = MLPPolicy(
         env.obs_dim,
         env.action_dim,
-        hidden_sizes=p.get("hidden_sizes", [256, 256]),
-        activation=p.get("activation", "tanh"),
+        hidden_sizes=list(baseline_hidden),
+        activation=act,
         action_space_type=env.action_space_type,
     ).to(device)
     return PerformanceStack(
@@ -236,6 +263,8 @@ def build_performance_stack_from_config(
 
     if pixel_obs:
         obs_shape_t = tuple(obs_shape)
+        if arch_cfg.get("mode") == "nature_cnn" or arch_cfg.get("cnn_family") == "nature":
+            return _nature_stack(obs_shape_t, action_dim, device, is_ctro)
         cnn = arch_cfg.get("cnn", {})
         emb_size = cnn.get("emb_size", 256)
         depths = tuple(cnn.get("depths", [16, 32, 32]))
@@ -303,16 +332,18 @@ def build_performance_stack_from_config(
             stack_type="ctro_mlp",
         )
 
+    baseline_hidden = arch_cfg.get("baseline_hidden", p.get("hidden_sizes", [64, 64]))
+    act = p.get("activation", "tanh")
     critic = FeedforwardCritic(
         obs_dim,
-        hidden_sizes=p.get("hidden_sizes", [256, 256]),
-        activation=p.get("activation", "tanh"),
+        hidden_sizes=list(baseline_hidden),
+        activation=act,
     ).to(device)
     policy = MLPPolicy(
         obs_dim,
         action_dim,
-        hidden_sizes=p.get("hidden_sizes", [256, 256]),
-        activation=p.get("activation", "tanh"),
+        hidden_sizes=list(baseline_hidden),
+        activation=act,
         action_space_type=action_space_type,
     ).to(device)
     return PerformanceStack(

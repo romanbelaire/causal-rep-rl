@@ -39,6 +39,7 @@ rl-venv/
 
 # Logs and outputs
 logs/
+outputs/
 *.log
 *.out
 *.err
@@ -46,12 +47,20 @@ checkpoints/
 wandb/
 tensorboard/
 
+# Model weights and run artifacts (local / ocean only — never commit)
+*.pt
+*.pth
+*.ckpt
+!artifacts/theory_validation/z_ref/*.pt
+
 # Data
 data/
 *.h5
 *.hdf5
 *.pkl
 *.pickle
+results/
+
 
 # SLURM
 *.out
@@ -72,3 +81,11 @@ temp/
 
 *.out
 *.tex
+
+_pull_backup_20260810/
+
+#External Packages
+Minigrid/
+convex-init/
+
+

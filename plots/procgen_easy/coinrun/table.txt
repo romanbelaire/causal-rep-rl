@@ -1,0 +1,6 @@
+Negative-control comparison — coinrun
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE              7.1424 ± 0.1663         0.0255     1.8345
+LATENT_NOLINK         4.8053 ± 0.8343         3.4598     2.4762
+CTRO                  5.0355 ± 0.0355         4.2610    10.0047

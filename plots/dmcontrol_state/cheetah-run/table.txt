@@ -1,0 +1,6 @@
+Negative-control comparison — cheetah-run
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE              7.0008 ± 4.5983       108.6389     3.4672
+LATENT_NOLINK        188.8697 ± 34.8074         2.8668    10.1946
+CTRO                 377.9004 ± 13.1269       107.0713     9.2771

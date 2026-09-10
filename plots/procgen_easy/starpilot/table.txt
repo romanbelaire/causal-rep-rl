@@ -1,0 +1,6 @@
+Negative-control comparison — starpilot
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE              3.3110 ± 1.0363         0.0633     4.9475
+LATENT_NOLINK         5.5486 ± 1.9493         0.0474    52.1722
+CTRO                  8.1862 ± 0.2052        37.1115    25.5875

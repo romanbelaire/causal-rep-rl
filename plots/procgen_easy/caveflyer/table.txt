@@ -1,0 +1,6 @@
+Negative-control comparison — caveflyer
+Cell                           Return    mu_PL (q05)         PR
+--------------------------------------------------------------
+BASELINE              3.1452 ± 0.1075         0.0766     1.3428
+LATENT_NOLINK         4.5033 ± 0.8982         1.2876     2.0514
+CTRO                  4.5301 ± 0.9867        41.5551    11.8848
