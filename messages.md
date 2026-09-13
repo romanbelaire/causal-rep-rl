@@ -1,0 +1,15 @@
+# Messages
+
+## 2026-09-10 — contribution 1 gate failed (jobs 45716019, 45726633)
+
+The AAMAS analysis paper was gated on contribution 1: local aliasing in the encoder should predict failure more strongly than participation ratio (PR). Failure is locked as held-out test return (`eval_test_return_mean`, Procgen `num_levels=0`). Reward density is a pre-registered interaction on that predictor (dense: starpilot, fruitbot, caveflyer, chaser; sparse: coinrun, maze, miner, leaper), not a fourth finding. Contribution 2 (PPO plus a median-normalized GAE hinge) is not licensed unless (1) holds. It does not hold. Do not submit the 30-cell GPU hinge screen.
+
+**What we measured.** Frozen `weights_final.pt` from existing Procgen easy and DeepMind Control Suite (DMC) state runs. Each cell is a 512-step on-policy re-rollout on CPU. Aliasing is computed on a random derangement of that batch. The hard rate is the fraction of pairs whose GAE-return gap is at or above the median and whose normalized latent distance is below \(\alpha\). Soft score is the median of \((|\Delta\hat R|/s_R)/(\|\Delta z\|/s_Z+\varepsilon)\) on those same above-median return pairs. Geometry–value Spearman is the rank correlation of pairwise \(\|\Delta z\|\) with \(|\Delta\hat R|\). The functional value probe is a ridge linear fit from latent \(z\) to GAE; NMSE divides held-out MSE by held-out target variance. Pairwise distances and return gaps are already median-normalized inside each batch. Spearman of the cell-level scores against test return is already invariant to further monotonic scaling of those scores, so z-scoring the 90 numbers would not change the gate.
+
+**Procgen (the gate) — job 45726633, 90 cells, COMPLETED.** Averaging Spearman coefficients computed inside each game: logged PR +0.30, same-batch re-rolled PR +0.46, fifth-percentile pairwise distance +0.45. Hard aliasing rate −0.24 (right sign: more aliased pairs, lower return) does not beat either PR. Soft score −0.11; geometry–value Spearman +0.21; probe NMSE +0.12 (wrong sign for “worse fit, worse return”). On dense games the aliasing-rate coefficient is −0.45 versus logged PR +0.48 and re-rolled PR +0.74. On sparse games every predictor is near zero. Seven cells had median latent distance \(s_Z=0\) and were recorded as fully aliased. Fifth-percentile distance matches same-batch PR, but that is collapse/spread, not return-conditioned aliasing.
+
+**DMC state — job 45716019, 60 loadable cells.** Pooled probe MSE vs return was +0.55, a scale confound (hopper-hop near-zero return implies near-zero GAE, so raw MSE looks excellent). After ranking within task: probe MSE +0.03, aliasing rate −0.20, PR −0.20. Cartpole-swingup is the only DMC task where aliasing looks like the hypothesis. DMC is not Procgen held-out levels and cannot pass the paper gate.
+
+**Phoenix Stage A ep16 (logs only).** Contemporaneous Spearman of on-policy cumulant NMSE with eval return is about −0.23; lag-10 is near 0. Not a leading indicator.
+
+CSVs: `results/aliasing_predictiveness/procgen_easy/` and `results/aliasing_predictiveness/dmc_state/`.

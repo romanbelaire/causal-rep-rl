@@ -48,6 +48,12 @@ BASE_ALGO_CONFIG = {
     "value_spectral_norm": False,
     "actor_updates_encoder": True,
     "target_kl": None,
+    "sep_coef": 0.0,
+    "alpha_sep": 1.0,
+    "sep_shuffle_returns": False,
+    "z_l2_coef": 0.0,
+    "sep_pair_mode": "perm",
+    "sep_s_r_eps": 1e-8,
 }
 
 # Named recipes — see docs/METHOD_CHANGELOG.md

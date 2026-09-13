@@ -177,10 +177,11 @@ def build_performance_stack(
         obs_shape = tuple(env.obs_shape)
         if arch_cfg.get("mode") == "nature_cnn" or arch_cfg.get("cnn_family") == "nature":
             return _nature_stack(obs_shape, env.action_dim, device, is_ctro)
-        cnn = arch_cfg.get("cnn", {})
-        emb_size = cnn.get("emb_size", 256)
-        depths = tuple(cnn.get("depths", [16, 32, 32]))
-        if is_ctro:
+        cnn = arch_cfg["cnn"]
+        emb_size = cnn["emb_size"]
+        depths = tuple(cnn["depths"])
+        shared_encoder = is_ctro or ("shared_encoder" in arch_cfg and bool(arch_cfg["shared_encoder"]))
+        if shared_encoder:
             return _pixel_ctro_stack(
                 obs_shape,
                 env.action_dim,
@@ -265,17 +266,18 @@ def build_performance_stack_from_config(
         obs_shape_t = tuple(obs_shape)
         if arch_cfg.get("mode") == "nature_cnn" or arch_cfg.get("cnn_family") == "nature":
             return _nature_stack(obs_shape_t, action_dim, device, is_ctro)
-        cnn = arch_cfg.get("cnn", {})
-        emb_size = cnn.get("emb_size", 256)
-        depths = tuple(cnn.get("depths", [16, 32, 32]))
-        if is_ctro:
+        cnn = arch_cfg["cnn"]
+        emb_size = cnn["emb_size"]
+        depths = tuple(cnn["depths"])
+        shared = is_ctro or bool(config["policy_on_latent"])
+        if shared:
             return _pixel_ctro_stack(
                 obs_shape_t,
                 action_dim,
                 action_space_type,
                 arch_cfg,
                 device,
-                stack_type_override=config.get("stack_type"),
+                stack_type_override=config["stack_type"] if "stack_type" in config else None,
             )
 
         critic = ImpalaValueCritic(obs_shape_t, emb_size=emb_size, depths=depths).to(device)

@@ -16,7 +16,7 @@ from src.losses.q_td import (
     policy_value_from_q,
     q_td_loss,
 )
-from src.losses.separation import separation_loss
+from src.losses.separation import trusted_negative_separation_loss
 from src.metrics.pair_equivalence import pair_equivalence_stats
 from src.metrics.relational_trust_region import relational_distortion
 from src.metrics.reward_test_signature import estimated_d_hat_sig_mean
@@ -330,7 +330,7 @@ class ActiveCTRO(CTRO):
             stats["own_mico_loss"] = mico_loss.detach()
             stats["own_mico_coef"] = torch.tensor(self.mico_ac_coef, device=device)
         if self.sep_enabled and self.sep_coef > 0:
-            sep_loss, sep_stats = separation_loss(
+            sep_loss, sep_stats = trusted_negative_separation_loss(
                 z, pair_i, pair_j, d_hat_lower, w_neg, self.alpha_sep
             )
             extra = extra + self.sep_coef * sep_loss

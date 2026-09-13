@@ -53,7 +53,8 @@ def load_stack(run_dir: Path, device: str = "cpu"):
         {
             "architecture": config["architecture"],
             "agent_class": config["agent_class"],
-            "stack_type": config.get("stack_type"),
+            "stack_type": config["stack_type"] if "stack_type" in config else None,
+            "policy_on_latent": config["policy_on_latent"],
         },
         obs_dim=obs_dim if obs_shape is None else 0,
         action_dim=action_dim,

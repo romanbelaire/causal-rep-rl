@@ -3,7 +3,7 @@
 import torch
 
 from src.environments.toys import EqualValueAliasToy, NuisanceToy
-from src.losses.separation import separation_loss
+from src.losses.separation import trusted_negative_separation_loss
 from src.metrics.reward_test_signature import (
     d_hat_sig,
     intervene_reward_strings,
@@ -38,7 +38,7 @@ def main() -> None:
         dhat, sigma, tau_pos=0.1, tau_neg=0.3, confidence_z=1.0, diversity=diversity, warmup=False
     )
     d_hat_lower = pair_lower_bound(dhat, sigma, 1.0)
-    sep, stats = separation_loss(z, torch.tensor([0]), torch.tensor([1]), d_hat_lower, w_neg, alpha_sep=1.0)
+    sep, stats = trusted_negative_separation_loss(z, torch.tensor([0]), torch.tensor([1]), d_hat_lower, w_neg, alpha_sep=1.0)
     if float(stats["train_sep_n_pairs"]) <= 0 or float(sep.item()) <= 0:
         raise RuntimeError("T3: T2-style pair lost its separation margin")
     n0 = torch.zeros(nuisance.obs_dim); n0[0] = 1.0

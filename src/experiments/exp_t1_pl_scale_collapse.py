@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 
-from src.losses.separation import separation_loss
+from src.losses.separation import trusted_negative_separation_loss
 from src.metrics.feature_rank import compute_feature_rank_metrics
 from src.metrics.pl_ratio import compute_mu_pl_bootstrap, target_landscape_pl_stats
 
@@ -86,7 +86,7 @@ def main() -> None:
     pair_j = torch.arange(8, 16)
     d_true = (s[pair_i] - s[pair_j]).norm(dim=1)
     w_neg = torch.ones_like(d_true)
-    sep, sep_stats = separation_loss(z_c, pair_i, pair_j, d_true, w_neg, alpha_sep=1.0)
+    sep, sep_stats = trusted_negative_separation_loss(z_c, pair_i, pair_j, d_true, w_neg, alpha_sep=1.0)
     if float(sep_stats["train_sep_n_pairs"]) <= 0 or float(sep.item()) <= 0:
         raise RuntimeError("T1: L_sep failed to detect the collapsed negative pairs")
     print("T1 pl_scale_collapse ok")

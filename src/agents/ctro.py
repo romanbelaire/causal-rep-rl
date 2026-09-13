@@ -260,11 +260,13 @@ class CTRO(PPO):
         self,
         batch_obs: torch.Tensor,
         z: torch.Tensor,
+        batch_returns: torch.Tensor,
         batch_rewards: torch.Tensor | None,
         batch_next_obs: torch.Tensor | None,
         phase: str = "joint",
         batch_indices: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict]:
+        del batch_returns
         extra = torch.tensor(0.0, device=self.device)
         stats: dict = {}
         epoch = self._training_epoch

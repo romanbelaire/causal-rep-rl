@@ -3,7 +3,7 @@
 import torch
 
 from src.environments.toys import kl_null_shear_z
-from src.losses.separation import separation_loss
+from src.losses.separation import trusted_negative_separation_loss
 from src.metrics.relational_trust_region import relational_distortion
 
 
@@ -15,7 +15,7 @@ def main() -> None:
     pair_j = torch.arange(16, 32)
     d_old = (z[pair_i] - z[pair_j]).norm(dim=1)
     w_neg = torch.ones_like(d_old)
-    sep0, _ = separation_loss(z, pair_i, pair_j, d_old, w_neg, alpha_sep=1.0)
+    sep0, _ = trusted_negative_separation_loss(z, pair_i, pair_j, d_old, w_neg, alpha_sep=1.0)
     if float(sep0.item()) > 1e-6:
         raise RuntimeError("T5: trusted pairs should sit on the margin before contraction")
 
@@ -25,7 +25,7 @@ def main() -> None:
         raise RuntimeError("T5: denominators were excluded; cannot test preservation")
     if float(metric_bad) <= 0.2:
         raise RuntimeError(f"T5: contraction was not detected: D_Z_inf_B={float(metric_bad):.4f}")
-    sep_bad, _ = separation_loss(z_bad, pair_i, pair_j, d_old, w_neg, alpha_sep=1.0)
+    sep_bad, _ = trusted_negative_separation_loss(z_bad, pair_i, pair_j, d_old, w_neg, alpha_sep=1.0)
     if float(sep_bad.item()) <= float(sep0.item()):
         raise RuntimeError("T5: contracted encoder did not increase L_sep")
 

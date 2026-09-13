@@ -88,6 +88,22 @@ class PPO:
         self.norm_adv = bool(config.get("norm_adv", True))
         self.total_update_epochs = int(config.get("total_update_epochs", 0))
         self._lr_update_count = 0
+        self.sep_coef = float(config["sep_coef"])
+        self.alpha_sep = float(config["alpha_sep"])
+        self.sep_shuffle_returns = bool(config["sep_shuffle_returns"])
+        self.z_l2_coef = float(config["z_l2_coef"])
+        self.sep_pair_mode = str(config["sep_pair_mode"])
+        self.sep_s_r_eps = float(config["sep_s_r_eps"])
+        if self.sep_coef > 0.0 and self.z_l2_coef > 0.0:
+            raise RuntimeError("sep_coef and z_l2_coef cannot both be > 0")
+        if self.sep_shuffle_returns and self.sep_coef <= 0.0:
+            raise RuntimeError("sep_shuffle_returns requires sep_coef > 0")
+        if self.sep_shuffle_returns and self.z_l2_coef > 0.0:
+            raise RuntimeError("sep_shuffle_returns cannot combine with z_l2_coef")
+        if self.sep_coef > 0.0 and self.alpha_sep <= 0.0:
+            raise RuntimeError(f"alpha_sep must be > 0 when sep_coef > 0, got {self.alpha_sep}")
+        if self.sep_pair_mode not in ("perm", "top_decile"):
+            raise RuntimeError(f"sep_pair_mode must be perm or top_decile, got {self.sep_pair_mode!r}")
 
         # Reference buffer for D_Z / PL frozen probe / geometry (optional)
         self.ref_obs: torch.Tensor | None = None
@@ -293,12 +309,42 @@ class PPO:
         self,
         batch_obs: torch.Tensor,
         z: torch.Tensor,
+        batch_returns: torch.Tensor,
         batch_rewards: torch.Tensor | None,
         batch_next_obs: torch.Tensor | None,
         phase: str = "joint",
         batch_indices: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict]:
-        return torch.tensor(0.0, device=self.device), {}
+        del batch_obs, batch_rewards, batch_next_obs, phase, batch_indices
+        extra = torch.tensor(0.0, device=self.device)
+        stats: dict = {}
+        if self.sep_coef > 0.0:
+            from src.losses.separation import separation_loss
+
+            sep, sep_stats = separation_loss(
+                z,
+                batch_returns,
+                alpha_sep=self.alpha_sep,
+                shuffle_returns=self.sep_shuffle_returns,
+                pair_mode=self.sep_pair_mode,
+                s_r_eps=self.sep_s_r_eps,
+            )
+            extra = extra + self.sep_coef * sep
+            stats.update(sep_stats)
+            stats["own_sep_coef"] = torch.tensor(self.sep_coef, device=self.device)
+        if self.z_l2_coef > 0.0:
+            z_l2 = z.pow(2).sum(dim=1).mean()
+            extra = extra + self.z_l2_coef * z_l2
+            stats["train_z_l2"] = z_l2.detach()
+            stats["own_z_l2_coef"] = torch.tensor(self.z_l2_coef, device=self.device)
+        if extra.requires_grad:
+            enc_params = self._encoder_params()
+            grads = torch.autograd.grad(extra, enc_params, retain_graph=True)
+            sq = torch.zeros((), device=self.device)
+            for g in grads:
+                sq = sq + g.pow(2).sum()
+            stats["own_sep_encoder_grad"] = sq.sqrt().detach()
+        return extra, stats
 
     def _after_optimizer_step(self, phase: str = "joint") -> None:
         pass
@@ -411,6 +457,7 @@ class PPO:
             extra_loss, extra_stats = self._extra_critic_terms(
                 batch_obs,
                 fwd["z"],
+                batch_returns,
                 batch_rewards,
                 batch_next_obs,
                 phase=phase,

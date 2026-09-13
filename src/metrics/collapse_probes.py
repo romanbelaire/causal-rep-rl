@@ -15,23 +15,23 @@ def dormant_unit_fraction(z: torch.Tensor, var_eps: float = 1e-6) -> float:
     return float((var < var_eps).float().mean().item())
 
 
-def functional_value_probe_mse(
+def functional_value_probe(
     z: torch.Tensor,
     targets: torch.Tensor,
     ridge: float = 1e-3,
     train_frac: float = 0.5,
-) -> float:
-    """
-    Freeze encoder features z; fit a linear probe to value targets with ridge LS.
+) -> dict[str, float]:
+    """Freeze encoder features z; ridge-fit a linear probe to value targets.
 
     Uses the first train_frac of rows for the closed-form fit and reports MSE on
-    the held-out remainder. Fixed budget = one ridge solve (no iterative search).
+    the held-out remainder. NMSE divides that MSE by held-out target variance so
+    scale (hopper-near-zero GAE vs cartpole hundreds) does not dominate.
     """
     if z.ndim != 2:
-        raise RuntimeError(f"functional_value_probe_mse expects [N, d], got {tuple(z.shape)}")
+        raise RuntimeError(f"functional_value_probe expects [N, d], got {tuple(z.shape)}")
     if targets.ndim != 1:
         raise RuntimeError(
-            f"functional_value_probe_mse targets must be [N], got {tuple(targets.shape)}"
+            f"functional_value_probe targets must be [N], got {tuple(targets.shape)}"
         )
     if z.shape[0] != targets.shape[0]:
         raise RuntimeError(
@@ -46,7 +46,6 @@ def functional_value_probe_mse(
 
     z = z.detach().float()
     y = targets.detach().float()
-    # Bias column.
     ones = torch.ones(n, 1, device=z.device, dtype=z.dtype)
     x = torch.cat([z, ones], dim=1)
 
@@ -57,7 +56,26 @@ def functional_value_probe_mse(
     xty = x_tr.T @ y_tr
     w = torch.linalg.solve(xtx, xty)
     pred = x_te @ w
-    return float(((pred - y_te) ** 2).mean().item())
+    mse = float(((pred - y_te) ** 2).mean().item())
+    var_te = float(y_te.var(unbiased=False).item())
+    nmse = float("nan") if var_te <= 0.0 else mse / var_te
+    return {
+        "functional_probe_mse": mse,
+        "functional_probe_nmse": nmse,
+        "functional_probe_target_var": var_te,
+    }
+
+
+def functional_value_probe_mse(
+    z: torch.Tensor,
+    targets: torch.Tensor,
+    ridge: float = 1e-3,
+    train_frac: float = 0.5,
+) -> float:
+    """Held-out ridge probe MSE. Prefer `functional_value_probe` when NMSE is needed."""
+    return functional_value_probe(z, targets, ridge=ridge, train_frac=train_frac)[
+        "functional_probe_mse"
+    ]
 
 
 def near_zero_pair_rate(

@@ -34,9 +34,10 @@ from src.experiments.runner import set_seed
 from src.losses.dz_trust_region import compute_dz, compute_s_ref, pairwise_distance_histogram
 from src.metrics.collapse_probes import (
     dormant_unit_fraction,
-    functional_value_probe_mse,
+    functional_value_probe,
     near_zero_pair_rate,
 )
+from src.metrics.aliasing import aliasing_diagnostics
 from src.metrics.pl_ratio import value_gap_histogram
 from src.utils.best_episode_recorder import BestEpisodeFrameRecorder, make_best_episode_frame_recorder
 from src.utils.bisimulation_utils import encode_phi
@@ -255,9 +256,10 @@ def _eval_functional_probe(
             repr_net=None,
             embed_ball_radius=mico_embed_ball_radius,
         )
-    mse = functional_value_probe_mse(z, returns)
+    probe = functional_value_probe(z, returns)
     return {
-        "functional_probe_mse": mse,
+        "functional_probe_mse": probe["functional_probe_mse"],
+        "functional_probe_nmse": probe["functional_probe_nmse"],
         "dormant_unit_frac": dormant_unit_fraction(z),
     }
 
@@ -722,6 +724,8 @@ def _apply_arch_overrides(arch_cfg: dict, arch_overrides: dict | None) -> dict:
         arch["policy"] = {**arch["policy"], **arch_overrides["policy"]}
     if "critic" in arch_overrides:
         arch["critic"] = {**arch["critic"], **arch_overrides["critic"]}
+    if "shared_encoder" in arch_overrides:
+        arch["shared_encoder"] = bool(arch_overrides["shared_encoder"])
     return arch
 
 
@@ -1049,6 +1053,16 @@ def run_performance_train(
                     metrics["latent_pair_p50"] = float(pair_hist["p50"])
                     metrics["latent_pair_p95"] = float(pair_hist["p95"])
                     metrics["latent_pair_mean"] = float(pair_hist["mean"])
+                    metrics.update(
+                        aliasing_diagnostics(
+                            z_log,
+                            returns,
+                            float(algo_cfg["alpha_sep"]),
+                        )
+                    )
+                    probe = functional_value_probe(z_log, returns)
+                    metrics["functional_probe_mse"] = probe["functional_probe_mse"]
+                    metrics["functional_probe_nmse"] = probe["functional_probe_nmse"]
                 else:
                     # ALE: skip PL-grad evaluator (login cgroup); keep light critic rank only.
                     with torch.no_grad():

@@ -4,7 +4,7 @@ import torch
 
 from src.environments.toys import EqualValueAliasToy
 from src.losses.action_conditioned_mico import action_conditioned_mico_loss
-from src.losses.separation import separation_loss
+from src.losses.separation import trusted_negative_separation_loss
 from src.replay.pair_index import pair_confidence_weights, pair_lower_bound, select_same_action_pairs
 
 
@@ -50,7 +50,7 @@ def main() -> None:
     ac_loss, _ = action_conditioned_mico_loss(
         z, z.detach(), rewards, term, actions, pair_i, pair_j, 0.99, "euclidean", 0.1, 1.0, pair_weight=w_pos
     )
-    sep, sep_stats = separation_loss(z, pair_i, pair_j, d_hat_lower, w_neg, alpha_sep=1.0)
+    sep, sep_stats = trusted_negative_separation_loss(z, pair_i, pair_j, d_hat_lower, w_neg, alpha_sep=1.0)
     z_merged = torch.zeros_like(z)
     merge_d = (z_merged[pair_i] - z_merged[pair_j]).norm(dim=1).mean()
     live_d = (z[pair_i][w_neg > 0] - z[pair_j][w_neg > 0]).norm(dim=1).mean()

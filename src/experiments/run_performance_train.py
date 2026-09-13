@@ -208,6 +208,43 @@ def main():
     parser.add_argument("--enc-epochs", type=int, default=None)
     parser.add_argument("--val-epochs", type=int, default=None)
     parser.add_argument(
+        "--policy-on-latent",
+        action="store_true",
+        default=False,
+        help="Shared CNNEncoderCritic + policy-on-Z (required for L_sep on Procgen).",
+    )
+    parser.add_argument(
+        "--sep-coef",
+        type=float,
+        default=None,
+        help="λ_sep on the median-normalized |ΔR̂| hinge (0 = off).",
+    )
+    parser.add_argument(
+        "--alpha-sep",
+        type=float,
+        default=None,
+        help="Margin scale α on the GAE hinge.",
+    )
+    parser.add_argument(
+        "--sep-shuffle-returns",
+        action="store_true",
+        default=False,
+        help="A2: shuffle GAE returns within the minibatch before pairing.",
+    )
+    parser.add_argument(
+        "--z-l2-coef",
+        type=float,
+        default=None,
+        help="A3: coefficient on mean ||z||^2 (mutually exclusive with --sep-coef).",
+    )
+    parser.add_argument(
+        "--sep-pair-mode",
+        type=str,
+        default=None,
+        choices=["perm", "top_decile"],
+        help="Pair sample: full derangement or top decile of |ΔR̂|.",
+    )
+    parser.add_argument(
         "--no-collapse",
         action="store_true",
         default=False,
@@ -317,10 +354,25 @@ def main():
         algo_overrides["enc_epochs"] = args.enc_epochs
     if args.val_epochs is not None:
         algo_overrides["val_epochs"] = args.val_epochs
+    if args.sep_coef is not None:
+        algo_overrides["sep_coef"] = args.sep_coef
+    if args.alpha_sep is not None:
+        algo_overrides["alpha_sep"] = args.alpha_sep
+    if args.sep_shuffle_returns:
+        algo_overrides["sep_shuffle_returns"] = True
+    if args.z_l2_coef is not None:
+        algo_overrides["z_l2_coef"] = args.z_l2_coef
+    if args.sep_pair_mode is not None:
+        algo_overrides["sep_pair_mode"] = args.sep_pair_mode
 
     arch_overrides = None
-    if args.policy_hidden is not None:
-        arch_overrides = {"policy_hidden": args.policy_hidden}
+    if args.policy_hidden is not None or args.policy_on_latent:
+        arch_overrides = {}
+        if args.policy_hidden is not None:
+            arch_overrides["policy_hidden"] = args.policy_hidden
+        if args.policy_on_latent:
+            arch_overrides["shared_encoder"] = True
+            algo_overrides["policy_on_latent"] = True
 
     train_overrides: dict = {}
     if args.total_steps is not None:
